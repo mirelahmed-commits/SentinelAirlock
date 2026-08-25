@@ -1,0 +1,21 @@
+version: 1
+workspace:
+  ignore:
+    - ".git/**"
+    - ".airlock/**"
+    - "node_modules/**"
+policy:
+  deny_read:
+    - "**/.env"
+    - "**/*.pem"
+    - "**/.ssh/**"
+    - "**/.aws/**"
+  deny_write:
+    - ".git/**"
+    - ".airlock/**"
+  allow_write:
+    - "src/**"
+    - "app/**"
+network:
+  mode: "off"
+  allowlist: []

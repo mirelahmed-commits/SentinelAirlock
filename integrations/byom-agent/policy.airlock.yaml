@@ -1,0 +1,38 @@
+version: 1
+
+# Policy configuration for BYOM Agent Runtime Integration.
+#
+# Governed paths:
+#   allow_write: docs/**, src/**, app/**  (agent output and code directories)
+#   deny_write:  **/.env, secrets/**      (sensitive/credential paths — blocked + reverted)
+#
+# Network is off by default. The BYOM agent does not need network access
+# unless you configure an LLM endpoint (see integrations/byom-agent/README.md).
+
+workspace:
+  ignore:
+    - ".git/**"
+    - ".airlock/**"
+    - "node_modules/**"
+    - "__pycache__/**"
+    - "*.pyc"
+
+policy:
+  deny_read:
+    - "**/.env"
+    - "**/*.pem"
+    - "**/.ssh/**"
+    - "**/.aws/**"
+  deny_write:
+    - ".git/**"
+    - ".airlock/**"
+    - "**/.env"
+    - "secrets/**"
+  allow_write:
+    - "docs/**"
+    - "src/**"
+    - "app/**"
+
+network:
+  mode: "off"
+  allowlist: []

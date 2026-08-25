@@ -1,0 +1,29 @@
+# Sentinel Airlock — BYOM Agent Runtime Integration
+# Optional dependencies for LLM-backed agent modes.
+#
+# The default agent.py works with Python standard library only.
+# Install these packages ONLY if you want to connect agent.py to a local model.
+# None of these are required for the Airlock demo or for the default mode.
+#
+# See integrations/byom-agent/README.md for integration patterns.
+
+# ── Ollama (local inference, tool-use support) ───────────────────────────────
+# Runs local models: llama3, mistral, gemma, phi3, codellama, qwen2.5-coder, ...
+# Requires Ollama server: https://ollama.com
+# ollama>=0.2.0
+
+# ── OpenAI-compatible endpoint ───────────────────────────────────────────────
+# Works with: vLLM, llama.cpp (--server mode), Ollama (/v1), LM Studio, etc.
+# Set base_url to your local endpoint, e.g. http://localhost:8080/v1
+# openai>=1.0.0
+
+# ── LangChain / LangGraph ────────────────────────────────────────────────────
+# Use LangChain for tool-use chains or LangGraph for stateful multi-step agents.
+# Combine with any model backend above.
+# langchain-core>=0.2.0
+# langchain-ollama>=0.1.0
+# langgraph>=0.1.0
+
+# ── Raw HTTP (no extra deps) ──────────────────────────────────────────────────
+# If you prefer, call any OpenAI-compatible endpoint directly with urllib (stdlib).
+# Pattern shown in integrations/byom-agent/README.md under "Raw HTTP mode".

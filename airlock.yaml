@@ -1,0 +1,34 @@
+version: 1
+workspace:
+    ignore:
+        - .git/**
+        - .airlock/**
+        - node_modules/**
+policy:
+    deny_read:
+        - '**/.env'
+        - '**/*.pem'
+        - '**/.ssh/**'
+        - '**/.aws/**'
+    deny_write:
+        - .git/**
+        - .airlock/**
+    allow_write:
+        - src/**
+        - app/**
+network:
+    mode: "off"
+    allowlist: []
+signing:
+    private_key: ""
+    public_key: ""
+    key_id: ""
+team:
+    name: ""
+    default_worker: ""
+    index_path: ""
+defaults:
+    agent: generic-shell
+    mode: ""
+    policy_pack: ""
+    sandbox: ""

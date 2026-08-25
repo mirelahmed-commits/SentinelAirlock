@@ -1,0 +1,56 @@
+# ── Binaries ──────────────────────────────────────────────────
+airlock
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ── Go build / test output ────────────────────────────────────
+*.test
+*.out
+coverage.*
+*.cover
+
+# ── Airlock runtime artifacts ─────────────────────────────────
+# Per-run evidence, workspaces, checkpoints, exports, index.
+# Matches .airlock/ at any depth (incl. samples/*/.airlock/).
+.airlock/
+airlock-run-*.zip
+airlock-run-*.tar.gz
+
+# ── Release archives ──────────────────────────────────────────
+*.tar.gz
+release/
+
+# ── Demo-generated output ─────────────────────────────────────
+# Written into the sample repo by the BYOM agent at runtime.
+samples/byom-workspace/docs/byom-agent-notes.md
+# Written by demo runs that target the project root directly (root-only).
+/src/
+# Stale empty root-level directory from early dev (internal web is in internal/web/).
+/web/
+
+# ── Local secrets / env (never commit) ────────────────────────
+.env
+.env.*
+*.pem
+*.key
+
+# ── Tool session data (machine-specific, never commit) ────────
+.claude/
+
+# ── Internal dev notes (not part of the public project) ───────
+progress.md
+
+# ── Build/test cache ──────────────────────────────────────────
+.gocache/
+tmp/
+
+# ── OS / editor noise ─────────────────────────────────────────
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

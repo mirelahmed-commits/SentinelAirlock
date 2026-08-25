@@ -1,0 +1,16 @@
+name: strict
+policy:
+  deny_read:
+    - "**/.env"
+    - "**/*.pem"
+    - "**/.ssh/**"
+    - "**/.aws/**"
+  deny_write:
+    - ".git/**"
+    - ".airlock/**"
+  allow_write:
+    - "src/**"
+    - "app/**"
+network:
+  mode: "off"
+  allowlist: []
