@@ -53,7 +53,8 @@ ASSET="${BINARY}-${OS}-${ARCH}"
 
 # ── Resolve version ───────────────────────────────────────────────────────────
 if [[ "$VERSION" == "latest" ]]; then
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  # /releases/latest only returns non-prerelease; use /releases list to include RC builds
+  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" \
     | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\(.*\)".*/\1/')"
 fi
 
