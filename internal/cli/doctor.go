@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/execution"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/execution"
 )
 
 func doctorCmd() *cobra.Command {

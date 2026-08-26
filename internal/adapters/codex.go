@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourname/sentinel-airlock/internal/session"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
 )
 
 type CodexAdapter struct{}

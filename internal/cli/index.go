@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/index"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
 )
 
 func indexCmd() *cobra.Command {

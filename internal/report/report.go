@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/review"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/review"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 // Generate writes a self-contained, single-file HTML evidence report for a run.

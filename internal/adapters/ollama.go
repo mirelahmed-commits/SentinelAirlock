@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourname/sentinel-airlock/internal/providers"
-	"github.com/yourname/sentinel-airlock/internal/session"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/providers"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
 )
 
 type OllamaAdapter struct{}

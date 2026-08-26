@@ -18,8 +18,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/remote"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/remote"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 func workerCmd() *cobra.Command {

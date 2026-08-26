@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourname/sentinel-airlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
 )
 
 func PrintTimeline(evs []events.Event, tail int) {

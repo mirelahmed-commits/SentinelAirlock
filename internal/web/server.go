@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/index"
-	"github.com/yourname/sentinel-airlock/internal/review"
-	"github.com/yourname/sentinel-airlock/internal/rollback"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/review"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/rollback"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 type Server struct {

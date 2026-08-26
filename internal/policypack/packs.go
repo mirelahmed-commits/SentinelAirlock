@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/yourname/sentinel-airlock/internal/policy"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
 )
 
 type Pack struct {

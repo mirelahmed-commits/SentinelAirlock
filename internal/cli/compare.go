@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/review"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/review"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 func compareCmd() *cobra.Command {

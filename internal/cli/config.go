@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/execution"
-	"github.com/yourname/sentinel-airlock/internal/governance"
-	"github.com/yourname/sentinel-airlock/internal/policy"
-	"github.com/yourname/sentinel-airlock/internal/policypack"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/execution"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/governance"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policypack"
 	"gopkg.in/yaml.v3"
 )
 

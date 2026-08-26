@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yourname/sentinel-airlock/internal/policy"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
 )
 
 type VerifyResult struct {

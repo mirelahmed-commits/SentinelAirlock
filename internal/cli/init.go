@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/util"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/util"
 )
 
 func initCmd() *cobra.Command {

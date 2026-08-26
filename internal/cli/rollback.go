@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/rollback"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/rollback"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 func rollbackCmd() *cobra.Command {

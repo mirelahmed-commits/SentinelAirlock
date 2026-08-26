@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 func PrintRunSummary(a runmeta.Artifacts, approvalMode string, executionMode string) {

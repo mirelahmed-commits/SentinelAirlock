@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/agents"
-	"github.com/yourname/sentinel-airlock/internal/policy"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/agents"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
 )
 
 func agentsCmd() *cobra.Command {

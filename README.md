@@ -4,34 +4,43 @@
 
 Sentinel Airlock is an agent-governance boundary for coding agents. It wraps agent execution with policy controls, writes a tamper-evident evidence trail, and gives reviewers a full set of post-run tools — inspect, replay, verify, review, export — that work entirely from recorded evidence artifacts, with no agent dependency at review time. Local-first, not a SaaS dashboard. Only captures workflows launched through Airlock.
 
-## Requirements
+## Install
 
-| Tool | Version | Notes |
-|---|---|---|
-| Go | 1.22+ | Build only |
-| make | any | Build only |
-| Git | any | |
-| Docker / Colima / Podman | any | Container sandbox only — optional |
-
-## Install / Build
+### Option 1 — go install (Go 1.22+ required)
 
 ```bash
-git clone <repo-url>
-cd sentinel-airlock
-make build
-./airlock --version
+go install github.com/mirelahmed-commits/SentinelAirlock/cmd/airlock@latest
 ```
 
-`make build` produces a single `./airlock` binary. No further install step required.
+### Option 2 — curl installer (macOS / Linux, no Go required)
 
-To install to PATH:
 ```bash
-make install PREFIX=$HOME/bin
-# or
-scripts/install.sh "$HOME/bin"
+curl -fsSL https://raw.githubusercontent.com/mirelahmed-commits/SentinelAirlock/main/scripts/install.sh | sh
 ```
 
-Container runtime (Docker / Colima / Podman) is only needed for `--sandbox container`. The default workspace sandbox runs without it.
+Downloads the prebuilt binary for your OS/arch from the latest GitHub Release and installs it to `/usr/local/bin` (or `~/.local/bin` / `~/bin` if `/usr/local/bin` is not writable). Falls back to building from source if Go is available and no prebuilt binary exists.
+
+### Option 3 — direct binary download
+
+Grab the binary for your platform from the [Releases page](https://github.com/mirelahmed-commits/SentinelAirlock/releases), `chmod +x` it, and put it on your `PATH`.
+
+| Platform | Binary |
+|---|---|
+| macOS (Apple Silicon) | `airlock-darwin-arm64` |
+| macOS (Intel) | `airlock-darwin-amd64` |
+| Linux (x86-64) | `airlock-linux-amd64` |
+| Linux (ARM64) | `airlock-linux-arm64` |
+
+### Build from source (contributors)
+
+```bash
+git clone https://github.com/mirelahmed-commits/SentinelAirlock.git
+cd SentinelAirlock
+make build        # produces ./airlock
+make install      # installs to /usr/local/bin (or PREFIX=~/bin make install)
+```
+
+Requires Go 1.22+ and make. Container runtime (Docker / Colima / Podman) is only needed for `--sandbox container`.
 
 ## Quick Start
 

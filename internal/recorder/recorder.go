@@ -10,9 +10,9 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sergi/go-diff/diffmatchpatch"
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/governance"
-	"github.com/yourname/sentinel-airlock/internal/policy"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/governance"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
 )
 
 type Recorder struct {

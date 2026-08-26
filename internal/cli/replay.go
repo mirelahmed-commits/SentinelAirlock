@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/replay"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
-	"github.com/yourname/sentinel-airlock/internal/session"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/replay"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
 )
 
 type timelineRow struct {

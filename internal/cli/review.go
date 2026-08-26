@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/events"
-	"github.com/yourname/sentinel-airlock/internal/report"
-	"github.com/yourname/sentinel-airlock/internal/review"
-	"github.com/yourname/sentinel-airlock/internal/runmeta"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/report"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/review"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 )
 
 func reviewCmd() *cobra.Command {

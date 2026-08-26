@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/index"
-	"github.com/yourname/sentinel-airlock/internal/web"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/web"
 )
 
 func serveCmd() *cobra.Command {

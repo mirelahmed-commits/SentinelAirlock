@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
 )
 
 func fetchCmd() *cobra.Command {

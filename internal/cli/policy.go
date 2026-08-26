@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/yourname/sentinel-airlock/internal/policypack"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/policypack"
 )
 
 func policyCmd() *cobra.Command {

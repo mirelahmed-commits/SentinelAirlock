@@ -1,4 +1,4 @@
-module github.com/yourname/sentinel-airlock
+module github.com/mirelahmed-commits/SentinelAirlock
 
 go 1.22
 

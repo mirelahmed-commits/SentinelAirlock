@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/yourname/sentinel-airlock/internal/session"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
 )
 
 type CapabilitySet struct {
