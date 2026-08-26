@@ -15,7 +15,7 @@ go install github.com/mirelahmed-commits/SentinelAirlock/cmd/airlock@latest
 ### Option 2 — curl installer (macOS / Linux, no Go required)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mirelahmed-commits/SentinelAirlock/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mirelahmed-commits/SentinelAirlock/main/scripts/install.sh | bash
 ```
 
 Downloads the prebuilt binary for your OS/arch from the latest GitHub Release and installs it to `/usr/local/bin` (or `~/.local/bin` / `~/bin` if `/usr/local/bin` is not writable). Falls back to building from source if Go is available and no prebuilt binary exists.

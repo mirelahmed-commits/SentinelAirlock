@@ -4,7 +4,7 @@
 # Usage:
 #   bash scripts/install.sh                  # from source clone, installs to /usr/local/bin
 #   bash scripts/install.sh ~/.local/bin     # custom target dir
-#   curl -fsSL https://raw.githubusercontent.com/mirelahmed-commits/SentinelAirlock/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mirelahmed-commits/SentinelAirlock/main/scripts/install.sh | bash
 #
 # Behavior:
 #   1. If a prebuilt release binary exists on GitHub for the current OS/arch, download it.
