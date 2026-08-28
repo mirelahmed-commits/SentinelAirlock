@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -80,16 +79,13 @@ func removeViewerMeta() {
 	_ = os.Remove(viewerPIDPath())
 }
 
-// processAlive reports whether pid refers to a live process (signal 0 probe).
+// processAlive reports whether pid refers to a live process.
+// The implementation is platform-specific (see viewer_lifecycle_unix.go / _windows.go).
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return osProcAlive(pid)
 }
 
 // runningViewer returns the recorded viewer metadata if a live viewer exists.
@@ -134,8 +130,8 @@ func startViewerBackground(addr string, readOnly, openBrowser bool) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
-	// Detach into its own process group so it survives this terminal.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Detach into its own process group so it survives this terminal (Unix only).
+	osDetachCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start background viewer: %w", err)
 	}
@@ -205,7 +201,7 @@ func viewerStop() error {
 		return fmt.Errorf("could not find viewer process %d: %w", m.PID, err)
 	}
 	// Graceful first; the serving process removes its own metadata on SIGTERM.
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
+	if err := osSendStop(proc); err != nil {
 		_ = proc.Kill()
 	}
 	// Give it a moment to exit and self-clean; then ensure metadata is gone.
