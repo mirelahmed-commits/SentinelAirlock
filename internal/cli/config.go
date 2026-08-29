@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/execution"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/governance"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/policypack"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 

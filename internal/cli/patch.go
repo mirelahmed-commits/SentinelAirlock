@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/spf13/cobra"
 )
 
 func patchCmd() *cobra.Command {

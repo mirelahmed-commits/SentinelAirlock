@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
+	"github.com/spf13/cobra"
 )
 
 func indexCmd() *cobra.Command {

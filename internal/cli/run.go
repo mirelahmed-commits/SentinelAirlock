@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/adapters"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/agents"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
@@ -32,6 +31,7 @@ import (
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/util"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 func runCmd() *cobra.Command {

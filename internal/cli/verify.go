@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/spf13/cobra"
 )
 
 func verifyCmd() *cobra.Command {

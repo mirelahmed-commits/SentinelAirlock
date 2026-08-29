@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/governance"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 type Recorder struct {

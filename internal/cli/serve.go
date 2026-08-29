@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/web"
+	"github.com/spf13/cobra"
 )
 
 func serveCmd() *cobra.Command {

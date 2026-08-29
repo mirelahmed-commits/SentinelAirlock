@@ -3,10 +3,10 @@ package cli
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/output"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/replay"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/spf13/cobra"
 )
 
 func inspectCmd() *cobra.Command {

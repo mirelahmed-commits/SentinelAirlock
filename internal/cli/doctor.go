@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/execution"
+	"github.com/spf13/cobra"
 )
 
 func doctorCmd() *cobra.Command {

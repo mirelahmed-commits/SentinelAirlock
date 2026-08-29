@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/remote"
+	"github.com/spf13/cobra"
 )
 
 func submitCmd() *cobra.Command {

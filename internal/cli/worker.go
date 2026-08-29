@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/remote"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/spf13/cobra"
 )
 
 func workerCmd() *cobra.Command {

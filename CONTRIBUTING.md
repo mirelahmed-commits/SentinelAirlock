@@ -1,82 +1,113 @@
-# Contributing
+# Contributing to Sentinel Airlock
 
-## Development Setup
+## Prerequisites
+
+| Tool | Version | Required for |
+|---|---|---|
+| Go | 1.22+ | Build and test |
+| make | any | Build |
+| Git | any | Everything |
+
+No Docker, no API keys, no network access required for the default build and test cycle.
+
+## Fork and clone
 
 ```bash
-git clone <repo-url>
-cd sentinel-airlock
-make build
-./airlock --version
+# 1. Fork mirelahmed-commits/SentinelAirlock on GitHub, then:
+git clone https://github.com/<your-username>/SentinelAirlock.git
+cd SentinelAirlock
+git remote add upstream https://github.com/mirelahmed-commits/SentinelAirlock.git
+git fetch upstream
 ```
 
-Run the test suite:
+## Create a branch
+
+Always branch from the latest `upstream/main`:
+
 ```bash
-go test ./...
+git checkout -b fix/short-description upstream/main
+# or
+git checkout -b feat/short-description upstream/main
+# or
+git checkout -b docs/short-description upstream/main
 ```
 
-Verify a clean build before submitting changes:
+Keep branch names lowercase with hyphens. One concern per branch.
+
+## Build and test
+
 ```bash
-go test ./...
-make build
-./airlock bootstrap
+make build         # produces ./airlock
+go test ./...      # full test suite
+go vet ./...       # static analysis
+gofmt -w ./...     # format (required before committing)
 ```
 
-## Project Layout
+All four must pass before opening a PR. CI runs the same checks automatically on every PR.
 
-Key directories for contributors:
+## What to include in a PR
 
-| Path | What it contains |
+- **Focused change** — one bug fix, one feature, one doc update. Do not bundle unrelated cleanup.
+- **Tests** — add or update tests if you changed logic. New adapters, policy packs, and CLI commands all need tests.
+- **Docs** — update `README.md`, `docs/LIMITATIONS.md`, or inline flag help text if user-facing behavior changed.
+- **No generated artifacts** — do not commit `.airlock/`, `airlock` binary, `dist/`, `*.log`, secrets, or release archives. These are all in `.gitignore`.
+
+## Commit messages
+
+```
+fix: short description of what changed and why
+feat: add cross-platform shell selection to generic-shell adapter
+docs: clarify Windows limitations in LIMITATIONS.md
+```
+
+Use `fix:`, `feat:`, `docs:`, `test:`, or `refactor:` prefixes. Reference issues where relevant (`Closes #12`).
+
+## Open a PR
+
+Push your branch to **your fork** and open a PR against `mirelahmed-commits/SentinelAirlock:main`:
+
+```bash
+git push origin fix/short-description
+# then open a PR on GitHub from your fork branch → upstream main
+```
+
+Fill in the PR template. CI will run automatically. If checks fail, fix them on the same branch and push again — GitHub updates the PR automatically.
+
+## Project layout
+
+| Path | Contents |
 |---|---|
 | `cmd/airlock/main.go` | Entry point — wires all Cobra subcommands |
 | `internal/cli/` | One file per CLI command |
 | `internal/adapters/` | Agent adapter layer — add new adapters here |
-| `internal/policypack/` | Named policy packs — add new packs here |
+| `internal/policypack/` | Named policy packs |
 | `internal/execution/` | Sandbox engine (workspace / container / off) |
-| `internal/governance/` | Risk classification + approval decisions |
+| `internal/governance/` | Risk classification and approval decisions |
 | `internal/policy/` | `airlock.yaml` config loader |
 | `internal/runmeta/` | Run manifest, digest, artifact loader |
 | `internal/web/` | Local HTTP evidence viewer |
 
-## Adding a Policy Pack
+## Adding an adapter
 
-Policy packs live in `internal/policypack/packs.go`. Each pack is a struct that overrides specific fields from the base `airlock.yaml` config. Packs are merged over the base config at run time.
+1. Create `internal/adapters/<name>.go` implementing the `Adapter` interface (`Name`, `Prepare`, `Execute`)
+2. Register it in `internal/adapters/registry.go`
+3. Add diagnostics support in `internal/agents/diagnostics.go`
+4. Document the adapter name in `--agent` flag help in `internal/cli/run.go`
+5. Add tests
 
-Steps:
-1. Add a new named entry to the pack registry in `packs.go`
-2. Set only the fields the pack should override (deny patterns, network mode, approval mode, etc.)
-3. Add the pack name to the `--policy-pack` flag description in `internal/cli/run.go`
-4. Add a test case to verify the merged config is what you expect
+## Adding a policy pack
 
-## Adding an Adapter
+1. Add a named entry to the pack registry in `internal/policypack/packs.go`
+2. Set only the fields the pack overrides
+3. Add the pack name to `--policy-pack` flag help in `internal/cli/run.go`
+4. Add a test verifying the merged config
 
-Adapters live in `internal/adapters/`. Each adapter implements the `Adapter` interface:
-- `Name() string`
-- `Prepare(ctx RunContext) (Invocation, error)`
-
-Steps:
-1. Create a new file in `internal/adapters/` implementing the interface
-2. Register the adapter by name in `internal/adapters/registry.go`
-3. Add diagnostics support in `internal/agents/diagnostics.go` (version probe + install hints)
-4. Document the adapter name in the `--agent` flag description in `internal/cli/run.go`
-
-## Pull Request Expectations
-
-- Keep changes focused and scoped to one concern
-- Add or update tests for any logic changes
-- Update `samples/QUICKSTART.md` if CLI behaviour changes
-- Include before/after command output snippets for UX changes
-- Do not change the artifact schema without updating `internal/runmeta/`
-
-## Commit Hygiene
-
-- Prefer small, reviewable commits
-- Use clear commit messages: what changed and why
-- Reference issues where relevant
-
-## Reporting Issues
+## Reporting issues
 
 Open a GitHub issue with:
-- Airlock version (`./airlock --version`)
-- OS and Go version
+- Airlock version (`airlock --version`)
+- OS and architecture
 - Minimal reproduction steps
 - Actual vs expected output
+
+Security issues: see `SECURITY.md`.

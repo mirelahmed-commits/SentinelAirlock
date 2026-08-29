@@ -8,11 +8,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/replay"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
+	"github.com/spf13/cobra"
 )
 
 type timelineRow struct {

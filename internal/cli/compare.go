@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/review"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/runmeta"
+	"github.com/spf13/cobra"
 )
 
 func compareCmd() *cobra.Command {

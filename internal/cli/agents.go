@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/agents"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
+	"github.com/spf13/cobra"
 )
 
 func agentsCmd() *cobra.Command {
