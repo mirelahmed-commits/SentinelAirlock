@@ -2,6 +2,7 @@
 
 ## Current limitations
 
+- **Windows:** `generic-shell` uses PowerShell. macOS/Linux use bash. `--background` viewer detachment is not supported on Windows; use `airlock serve` in a separate terminal.
 - Agent backends (Codex, Claude Code, etc.) must be installed separately.
 - Container mode depends on host runtime/socket permissions.
 - Remote mode uses shared-token auth today; full IAM is out of scope.

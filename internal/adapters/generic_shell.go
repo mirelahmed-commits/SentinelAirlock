@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/session"
@@ -25,12 +26,27 @@ func (GenericShellAdapter) Prepare(ctx RunContext) (Invocation, error) {
 	if ctx.Command == "" {
 		return Invocation{}, fmt.Errorf("generic-shell requires --cmd")
 	}
+	exe, args := shellInvocation(ctx.Command)
 	return Invocation{
-		Executable:     "bash",
-		Args:           []string{"-lc", ctx.Command},
+		Executable:     exe,
+		Args:           args,
 		WorkingDir:     ctx.WorkspacePath,
 		DisplayCommand: ctx.Command,
 	}, nil
+}
+
+// shellInvocation returns the shell executable and arguments for the current OS.
+// Windows: powershell -NoProfile -NonInteractive -Command <cmd>
+// Others:  bash -lc <cmd>
+func shellInvocation(cmd string) (string, []string) {
+	return shellInvocationForOS(runtime.GOOS, cmd)
+}
+
+func shellInvocationForOS(goos, cmd string) (string, []string) {
+	if goos == "windows" {
+		return "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", cmd}
+	}
+	return "bash", []string{"-lc", cmd}
 }
 
 func (GenericShellAdapter) Execute(ctx RunContext, inv Invocation) (ExecutionResult, error) {
