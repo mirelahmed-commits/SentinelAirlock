@@ -108,6 +108,8 @@ The viewer has two explicit modes and can run in the foreground or detached:
 | `airlock serve --status` | — | reports mode / URL / PID / log |
 | `airlock serve --stop` | — | stops the running viewer |
 
+Default port is `8080`. If that's already taken (common on a shared demo machine), pass `--port` with any free port, e.g. `airlock serve --open --port 8082`.
+
 `--background` returns the terminal immediately, prints the URL/PID/log path, and records `.airlock/viewer.json` (+ `viewer.pid`, `viewer.log`). A second `serve` refuses to start a duplicate and points you at the running one; a stale PID (process gone) is cleaned automatically. In **operator mode**, a `Restore workspace` button runs the *same* rollback as the CLI (`internal/rollback`, not a subprocess) after a strong confirmation — and still restores only the Airlock workspace, never your original repo.
 
 The viewer is built to be operated without knowing Airlock's internal artifact model:
