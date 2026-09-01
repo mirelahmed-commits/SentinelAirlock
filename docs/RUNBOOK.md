@@ -131,6 +131,12 @@ Operator mode allows UI-driven review/rollback/export (with confirmation). Read-
 `403` on all mutating endpoints — safe to hand to someone else. `--background` detachment is not
 supported on Windows; run `airlock serve` in a separate terminal there instead.
 
+Default port is `8080`. If it's already in use, pass `--port` with any free port instead:
+
+```bash
+airlock serve --open --port 8082
+```
+
 ## Full flow, start to finish
 
 ```bash
