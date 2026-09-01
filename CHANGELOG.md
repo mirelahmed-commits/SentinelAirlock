@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.3.0-rc1] — 2026-09-01
+
+### Changed
+- **License changed from MIT to AGPL-3.0-only.** See [`LICENSE`](LICENSE).
+
+### Added
+- `airlock policy configure` — interactive first-run setup for common sensitive-path deny rules (`.env`, `*.key`, `*.pem`, `secrets/**`, `credentials/**`, custom paths) and network mode. Preserves the rest of `airlock.yaml`, is idempotent, and fails cleanly (no hang) on non-interactive stdin.
+- `docs/RUNBOOK.md` — canonical command-by-command CLI runbook, linked from the README Quick Start.
+- `airlock bootstrap` now prints next-step guidance pointing to `policy configure` and `policy show`.
+
 ## [2.2.0-rc1] — 2026-03-08
 
 First release candidate. Covers the full governed run lifecycle, evidence artifact model, all terminal operator flows, and the remote worker foundation.

@@ -1,6 +1,6 @@
 # Sentinel Airlock
 
-**v2.2.0-rc1** · Go 1.22 · local-first · no SaaS required
+**v2.3.0-rc1** · Go 1.22 · local-first · no SaaS required
 
 Sentinel Airlock is an agent-governance boundary for coding agents. It wraps agent execution with policy controls, writes a tamper-evident evidence trail, and gives reviewers a full set of post-run tools — inspect, replay, verify, review, export — that work entirely from recorded evidence artifacts, with no agent dependency at review time. Local-first, not a SaaS dashboard. Only captures workflows launched through Airlock.
 
@@ -278,7 +278,7 @@ See [`SECURITY.md`](SECURITY.md) and [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md
 - **Only captures through Airlock:** Only captures workflows launched through `airlock run`. Not a system-wide agent monitor.
 - Agent backend CLIs must be installed separately; Airlock wraps them.
 - Container sandbox depends on host runtime availability (Docker/Colima/Podman) and socket access.
-- Remote auth is shared-token only — no per-user IAM at v2.2.0-rc1.
+- Remote auth is shared-token only — no per-user IAM at v2.3.0-rc1.
 - Airlock is **not** a hosted SaaS dashboard or control plane.
 - Airlock is **not** a replacement for OS-level security or network perimeter controls.
 
