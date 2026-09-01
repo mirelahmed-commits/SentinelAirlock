@@ -32,11 +32,12 @@ func bootstrapCmd() *cobra.Command {
 			if err := configDoctorCmd().RunE(cmd, nil); err != nil {
 				return err
 			}
-			fmt.Println("Bootstrap complete. Next steps:")
-			fmt.Println("1) ./airlock run --agent generic-shell --cmd 'mkdir -p src; echo hi > src/test.txt' --repo .")
-			fmt.Println("2) ./airlock inspect <run_id>")
-			fmt.Println("3) ./airlock serve --open")
-			fmt.Printf("Policy path: %s\n", filepath.Clean(policyPath))
+			fmt.Println("Bootstrap complete.")
+			fmt.Printf("Policy path: %s\n\n", filepath.Clean(policyPath))
+			fmt.Println("Next:")
+			fmt.Println("  airlock policy configure   # interactive policy setup")
+			fmt.Println("  airlock policy show        # inspect effective policy")
+			fmt.Println("  airlock run ...            # run an agent")
 			return nil
 		},
 	}

@@ -1,5 +1,5 @@
 # ── Binaries ──────────────────────────────────────────────────
-airlock
+/airlock
 dist/
 *.exe
 *.dll

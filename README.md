@@ -1,6 +1,6 @@
 # Sentinel Airlock
 
-**v2.2.0-rc1** · Go 1.22 · local-first · no SaaS required
+**v2.3.0-rc1** · Go 1.22 · local-first · no SaaS required
 
 Sentinel Airlock is an agent-governance boundary for coding agents. It wraps agent execution with policy controls, writes a tamper-evident evidence trail, and gives reviewers a full set of post-run tools — inspect, replay, verify, review, export — that work entirely from recorded evidence artifacts, with no agent dependency at review time. Local-first, not a SaaS dashboard. Only captures workflows launched through Airlock.
 
@@ -51,6 +51,8 @@ Requires Go 1.22+ and make. Container runtime (Docker / Colima / Podman) is only
 # 1. Set up your project
 cd your-project
 airlock bootstrap          # writes airlock.yaml + .airlock/
+airlock policy configure   # interactive: pick deny-path presets + network mode
+airlock policy show        # inspect the effective policy
 
 # 2. Run an agent under governance
 airlock run --agent generic-shell --cmd 'mkdir -p src && echo hi > src/test.txt' --repo .
@@ -71,6 +73,8 @@ airlock serve --background --open   # detached — keeps your terminal
 airlock serve --status              # mode / URL / PID / log
 airlock serve --stop                # clean shutdown
 ```
+
+Full command-by-command walkthrough with expected output: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ### Try it now (self-contained, ~60 seconds)
 
@@ -133,6 +137,10 @@ The self-contained HTML report (`report/index.html`, no JavaScript, no network) 
 | Command | Purpose |
 |---|---|
 | `airlock bootstrap` | Init `.airlock/` and starter `airlock.yaml` |
+| `airlock policy configure` | Interactive setup for common deny-path presets and network mode |
+| `airlock policy show` | Print effective project policy (packs, network, allow/deny rules) |
+| `airlock policy list` | List available policy packs |
+| `airlock policy apply <pack>` | Write a named policy pack to `airlock.yaml` |
 | `airlock run` | Governed agent execution — produces full artifact set |
 | `airlock inspect <id>` | Pretty-print run artifacts |
 | `airlock replay <id>` | Terminal event-timeline replay |
@@ -224,6 +232,7 @@ bash scripts/dev/demo-byom.sh
 
 | Document | Contents |
 |---|---|
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Canonical command-by-command runbook — install through serve lifecycle |
 | [`docs/REVIEWER_GUIDE.md`](docs/REVIEWER_GUIDE.md) | End-to-end reviewer walkthrough + what to look for in reports |
 | [`docs/architecture.md`](docs/architecture.md) | Execution boundary diagram, run lifecycle, artifact model |
 | [`samples/QUICKSTART.md`](samples/QUICKSTART.md) | Copy-paste walkthrough with expected output |
@@ -269,6 +278,10 @@ See [`SECURITY.md`](SECURITY.md) and [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md
 - **Only captures through Airlock:** Only captures workflows launched through `airlock run`. Not a system-wide agent monitor.
 - Agent backend CLIs must be installed separately; Airlock wraps them.
 - Container sandbox depends on host runtime availability (Docker/Colima/Podman) and socket access.
-- Remote auth is shared-token only — no per-user IAM at v2.2.0-rc1.
+- Remote auth is shared-token only — no per-user IAM at v2.3.0-rc1.
 - Airlock is **not** a hosted SaaS dashboard or control plane.
 - Airlock is **not** a replacement for OS-level security or network perimeter controls.
+
+## License
+
+AGPL-3.0-only. See [LICENSE](LICENSE).
