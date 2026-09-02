@@ -4,9 +4,16 @@
 // restores a workspace, appends the ROLLBACK event, resets review, rebuilds the
 // digest, writes rollback.json, regenerates the report, and refreshes the index.
 //
-// Honesty guarantees (unchanged from v2.2.0-rc1):
-//   - Restores the isolated Airlock workspace (.airlock/workspaces/<id>/repo)
-//     ONLY. The original --repo source directory is never touched.
+// Honesty guarantees:
+//   - For workspace/container runs: restores the isolated Airlock workspace
+//     (.airlock/workspaces/<id>/repo) ONLY. The original --repo source
+//     directory is never touched.
+//   - For sandbox=off (in-place) runs: WorkspacePath IS the real --repo, so
+//     "restore" means restoring exactly the paths that run touched or
+//     attempted to touch, back to their checkpointed pre-run state. Full-mode
+//     restore never os.RemoveAll's an in-place WorkspacePath — files outside
+//     the run's touched-path set (.git, node_modules, unrelated work) are
+//     never modified.
 //   - One checkpoint per run (cp-0), taken before agent execution.
 //   - Operation-level rollback (undo last N operations) is future work.
 package rollback
@@ -44,6 +51,17 @@ type Plan struct {
 	WorkspacePath  string
 	Path           string // cleaned repo-relative path, empty for full restore
 	Mode           string // "full" | "path"
+
+	// InPlace is true when the run executed with sandbox=off, meaning
+	// WorkspacePath IS the real --repo, not a disposable staged copy. Full-mode
+	// restore must never os.RemoveAll an in-place WorkspacePath — that would
+	// delete the user's actual repository (including .git, node_modules, and
+	// anything else outside the checkpoint's ignore-filtered snapshot). Instead
+	// it restores exactly the paths this run touched, leaving everything else
+	// in the real repo untouched. Path-mode restore already only ever touches
+	// the one requested subtree, so it needs no special-casing either way.
+	InPlace      bool
+	TouchedPaths []string // in-place + full mode only: paths to restore
 }
 
 // Record is the on-disk rollback.json artifact.
@@ -51,6 +69,7 @@ type Record struct {
 	RunID      string    `json:"run_id"`
 	Checkpoint string    `json:"checkpoint"`
 	Mode       string    `json:"mode"` // "full" | "path"
+	InPlace    bool      `json:"in_place,omitempty"`
 	Paths      []string  `json:"paths,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
 	Status     string    `json:"status"` // "complete" | "dry-run"
@@ -61,6 +80,7 @@ type Result struct {
 	RunID         string
 	Checkpoint    string
 	Mode          string
+	InPlace       bool
 	Paths         []string
 	WorkspacePath string
 	DigestRebuilt bool
@@ -123,6 +143,8 @@ func BuildPlan(opts Options) (Plan, error) {
 		WorkspacePath:  wsPath,
 		Path:           cleanedPath,
 		Mode:           mode,
+		InPlace:        manifest.Sandbox.Mode == "off",
+		TouchedPaths:   append([]string(nil), manifest.TouchedPaths...),
 	}, nil
 }
 
@@ -143,6 +165,16 @@ func Execute(opts Options) (Result, error) {
 			return Result{}, fmt.Errorf("subtree restore failed: %w", err)
 		}
 		restoredPaths = []string{plan.Path}
+	} else if plan.InPlace {
+		// The workspace IS the real repo. Never os.RemoveAll it — restore only
+		// the specific paths this run touched (or attempted), leaving .git,
+		// node_modules, and everything else in the real repo untouched.
+		for _, rel := range plan.TouchedPaths {
+			if err := restoreSubtree(plan.CheckpointPath, plan.WorkspacePath, rel); err != nil {
+				return Result{}, fmt.Errorf("in-place restore failed for %q: %w", rel, err)
+			}
+		}
+		restoredPaths = append([]string(nil), plan.TouchedPaths...)
 	} else {
 		if err := os.RemoveAll(plan.WorkspacePath); err != nil {
 			return Result{}, fmt.Errorf("failed to clear workspace: %w", err)
@@ -199,6 +231,7 @@ func Execute(opts Options) (Result, error) {
 		RunID:      plan.RunID,
 		Checkpoint: plan.Checkpoint,
 		Mode:       plan.Mode,
+		InPlace:    plan.InPlace,
 		Paths:      restoredPaths,
 		Timestamp:  now,
 		Status:     "complete",
@@ -220,6 +253,7 @@ func Execute(opts Options) (Result, error) {
 		RunID:         plan.RunID,
 		Checkpoint:    plan.Checkpoint,
 		Mode:          plan.Mode,
+		InPlace:       plan.InPlace,
 		Paths:         restoredPaths,
 		WorkspacePath: plan.WorkspacePath,
 		DigestRebuilt: digestRebuilt,

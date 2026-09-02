@@ -111,6 +111,16 @@ func runCmd() *cobra.Command {
 			if cfg != nil && networkMode == string(execution.NetworkOff) && cfg.Network.Mode != "" {
 				networkMode = cfg.Network.Mode
 			}
+
+			// Resolved once, up front, so every downstream system (adapter cwd,
+			// mutation recorder, checkpoint source, patch diff, manifest) agrees
+			// on the same execution root instead of each guessing independently.
+			mode := execution.ParseMode(sandboxMode)
+			repoAbs, err := filepath.Abs(repoPath)
+			if err != nil {
+				return fmt.Errorf("could not resolve --repo %q: %w", repoPath, err)
+			}
+
 			effectiveCfg := map[string]any{
 				"policy_pack":       policyPack,
 				"execution_mode":    executionMode,
@@ -147,9 +157,6 @@ func runCmd() *cobra.Command {
 			if err := os.MkdirAll(runsDir, 0o755); err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(wsDir), 0o755); err != nil {
-				return err
-			}
 
 			logger, err := events.NewLogger(filepath.Join(runsDir, "events.jsonl"))
 			if err != nil {
@@ -173,24 +180,39 @@ func runCmd() *cobra.Command {
 			if cfg != nil {
 				ignore = cfg.Workspace.Ignore
 			}
-			if err := workspace.CopyRepo(repoPath, wsDir, ignore); err != nil {
-				return err
+
+			// executionRoot is the single directory every downstream system
+			// (adapter cwd, mutation recorder, patch diff, rollback target)
+			// treats as "the thing being governed":
+			//   workspace/container -> the staged .airlock/workspaces/<run>/repo copy
+			//   off                 -> the real --repo, in place, unstaged
+			// Internal Airlock storage (.airlock/runs/<run>/...) is separate from
+			// this and is never the governed target itself.
+			executionRoot := selectExecutionRoot(mode, repoAbs, wsDir)
+			checkpointSrc := wsDir
+			checkpointIgnore := []string(nil) // wsDir is already filtered by the copy above
+			if mode == execution.ModeOff {
+				checkpointSrc = repoAbs
+				checkpointIgnore = ignore // repoAbs is unfiltered; apply ignores now
+			} else {
+				if err := workspace.CopyRepo(repoPath, wsDir, ignore); err != nil {
+					return err
+				}
 			}
 
 			checkpointPath := filepath.Join(runsDir, "checkpoints", "cp-0")
-			if err := workspace.CopyRepo(wsDir, checkpointPath, nil); err != nil {
+			if err := workspace.CopyRepo(checkpointSrc, checkpointPath, checkpointIgnore); err != nil {
 				return err
 			}
 			logger.Add(events.Event{TS: time.Now().UTC(), Type: "CHECKPOINT_CREATED", Summary: "checkpoint captured", Meta: map[string]any{"id": "cp-0", "path": checkpointPath}})
 
-			runCtx := adapters.RunContext{RunID: runID, WorkspacePath: wsDir, RepoPath: repoPath, Task: task, ApprovalMode: approval, Environment: adapters.BaseEnv(task), AdapterName: adapter.Name(), Command: agentCmd, SessionSink: sessionSink}
+			runCtx := adapters.RunContext{RunID: runID, WorkspacePath: executionRoot, RepoPath: repoAbs, Task: task, ApprovalMode: approval, Environment: adapters.BaseEnv(task), AdapterName: adapter.Name(), Command: agentCmd, SessionSink: sessionSink}
 			inv, err := adapter.Prepare(runCtx)
 			if err != nil {
 				return err
 			}
 			logger.Add(events.Event{TS: time.Now().UTC(), Type: "ADAPTER_PREPARED", Summary: "adapter invocation prepared", Meta: map[string]any{"display_command": inv.DisplayCommand, "executable": inv.Executable, "args": inv.Args}})
 
-			mode := execution.ParseMode(sandboxMode)
 			netMode := execution.ParseNetworkMode(networkMode)
 			selectedRuntime := execution.Runtime(containerRuntime)
 			if selectedRuntime == "" {
@@ -251,7 +273,7 @@ func runCmd() *cobra.Command {
 			cmdDecision := governance.Decide(governance.ApprovalMode(approval), cmdRisk)
 			logger.Add(events.Event{TS: time.Now().UTC(), Type: "CMD", Summary: "agent command", Meta: map[string]any{"cmd": inv.DisplayCommand, "task": task, "repo": repoPath}, Risk: map[string]any{"level": string(cmdRisk.Level), "category": string(cmdRisk.Category), "reason": cmdRisk.Reason}, Approval: map[string]any{"mode": approval, "decision": string(cmdDecision)}})
 
-			rec, err := recorder.New(wsDir, logger, cfg, governance.ApprovalMode(approval))
+			rec, err := recorder.New(executionRoot, logger, cfg, governance.ApprovalMode(approval))
 			if err != nil {
 				return err
 			}
@@ -299,7 +321,14 @@ func runCmd() *cobra.Command {
 
 			evs := logger.EventsSnapshot()
 			patchPath := ""
-			patchBytes, patchErr := gitops.CreatePatchForPaths(repoPath, wsDir, changedPathsFromEvents(evs))
+			// For in-place runs, repoAbs/executionRoot IS the mutated target, so
+			// the "before" side of the diff must be the pre-run checkpoint, not
+			// the (unchanged, staged-mode-only) original --repo.
+			patchOrig, patchNew := repoPath, wsDir
+			if mode == execution.ModeOff {
+				patchOrig, patchNew = checkpointPath, executionRoot
+			}
+			patchBytes, patchErr := gitops.CreatePatchForPaths(patchOrig, patchNew, changedPathsFromEvents(evs))
 			if patchErr != nil {
 				logger.Add(events.Event{TS: time.Now().UTC(), Type: "PATCH_ERROR", Summary: "failed to generate patch", Meta: map[string]any{"error": patchErr.Error()}})
 			} else {
@@ -333,7 +362,7 @@ func runCmd() *cobra.Command {
 
 			manifest := runmeta.RunManifest{
 				RunID:           runID,
-				WorkspacePath:   wsDir,
+				WorkspacePath:   executionRoot,
 				PolicySummary:   runmeta.BuildPolicySummary(policyPath, cfg),
 				ExecutionMode:   executionMode,
 				TouchedPaths:    touchedPathsFromEvents(logger.EventsSnapshot()),
@@ -432,6 +461,19 @@ func runCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&printEffective, "print-effective-config", false, "Print effective merged config before running")
 	cmd.Flags().IntVar(&timeoutSec, "timeout-sec", 0, "Execution timeout in seconds (0 disables timeout)")
 	return cmd
+}
+
+// selectExecutionRoot picks the single directory that every downstream
+// system (adapter cwd, mutation recorder, patch diff, checkpoint,
+// rollback target) treats as "the thing being governed" for this run.
+// workspace and container modes are intentionally identical here — both
+// execute against the staged .airlock/workspaces/<run>/repo copy. Only
+// sandbox=off diverges: it governs the real --repo directly, in place.
+func selectExecutionRoot(mode execution.Mode, repoAbs, wsDir string) string {
+	if mode == execution.ModeOff {
+		return repoAbs
+	}
+	return wsDir
 }
 
 func capabilityMap(c adapters.CapabilitySet) map[string]any {

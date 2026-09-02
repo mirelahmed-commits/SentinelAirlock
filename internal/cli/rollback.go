@@ -26,11 +26,16 @@ func rollbackCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rollback [run_id]",
 		Short: "Restore a run workspace from a saved checkpoint",
-		Long: `Restores the isolated Airlock execution workspace from a checkpoint.
+		Long: `Restores a run's execution root from its checkpoint.
 
-This restores .airlock/workspaces/<run_id>/repo — NOT your original source
-directory. Your working repo is untouched. The agent always ran inside the
-isolated workspace copy; this resets that sandbox to its pre-run state.
+For workspace/container runs, this restores .airlock/workspaces/<run_id>/repo
+— NOT your original source directory. Your working repo is untouched.
+
+For sandbox=off (in-place) runs, the agent ran directly against your real
+--repo, so restore means reverting exactly the paths that run touched or
+attempted to touch back to their pre-run state. Files outside that set
+(.git, node_modules, unrelated work) are never modified — there is no
+whole-directory wipe of your real repo.
 
 Modes:
   Full restore:      airlock rollback <run_id>
@@ -45,8 +50,9 @@ After rollback:
   - rollback.json is written as a permanent rollback artifact.
   - report/index.html is regenerated.
 
-Limitations (v2.2.0-rc1):
-  - Workspace-only. Does not touch your original --repo path.
+Limitations:
+  - Restores only what this run touched or attempted to touch. Changes made
+    outside of an Airlock run (in-place or otherwise) are never affected.
   - One checkpoint per run (cp-0), taken before agent execution.
   - Operation-level rollback (undo last N moves) is future work.
   - Patch-reverse is not supported in this release.`,
@@ -103,7 +109,13 @@ Limitations (v2.2.0-rc1):
 			if plan.Path != "" {
 				fmt.Printf("  Path:       %s\n", plan.Path)
 			}
-			fmt.Printf("  Workspace:  %s\n", res.WorkspacePath)
+			if res.InPlace {
+				fmt.Printf("  Execution:  in-place\n")
+				fmt.Printf("  Repo:       %s\n", res.WorkspacePath)
+				fmt.Printf("  Restored:   %d touched path(s)\n", len(res.Paths))
+			} else {
+				fmt.Printf("  Workspace:  %s\n", res.WorkspacePath)
+			}
 			fmt.Printf("  Review:     needs-attention (re-review required)\n")
 			fmt.Printf("  Report:     %s\n", filepath.Join(".airlock", "runs", res.RunID, "report", "index.html"))
 			if res.DigestRebuilt {
@@ -129,7 +141,11 @@ func doDryRun(plan rollback.Plan) error {
 	fmt.Printf("Dry-run: no files will be modified.\n\n")
 	fmt.Printf("  Run ID:     %s\n", plan.RunID)
 	fmt.Printf("  Checkpoint: %s\n  Source:     %s\n", plan.Checkpoint, plan.CheckpointPath)
-	fmt.Printf("  Workspace:  %s\n", plan.WorkspacePath)
+	if plan.InPlace {
+		fmt.Printf("  Execution:  in-place\n  Repo:       %s\n", plan.WorkspacePath)
+	} else {
+		fmt.Printf("  Workspace:  %s\n", plan.WorkspacePath)
+	}
 
 	if plan.Path != "" {
 		cpSub := filepath.Join(plan.CheckpointPath, plan.Path)
@@ -137,13 +153,20 @@ func doDryRun(plan rollback.Plan) error {
 		fmt.Printf("  Mode:       path\n")
 		fmt.Printf("  Path:       %s\n", plan.Path)
 		fmt.Printf("\n  Checkpoint source: %s  (exists=%v)\n", cpSub, fsExists(cpSub))
-		fmt.Printf("  Workspace target:  %s  (exists=%v)\n", wsSub, fsExists(wsSub))
+		fmt.Printf("  Target:            %s  (exists=%v)\n", wsSub, fsExists(wsSub))
 		if fsExists(cpSub) {
 			fc, dc := countFS(cpSub)
 			fmt.Printf("  Would restore: %d file(s) in %d dir(s)\n", fc, dc)
 		} else {
-			fmt.Printf("  Note: path not in checkpoint — would be removed from workspace.\n")
+			fmt.Printf("  Note: path not in checkpoint — would be removed from target.\n")
 		}
+	} else if plan.InPlace {
+		fmt.Printf("  Mode:       full (in-place)\n")
+		fmt.Printf("\n  Would restore %d touched path(s) to their pre-run state:\n", len(plan.TouchedPaths))
+		for _, rel := range plan.TouchedPaths {
+			fmt.Printf("    %s\n", rel)
+		}
+		fmt.Printf("  Files outside this set are not affected — no whole-repo wipe.\n")
 	} else {
 		cpFiles, cpDirs := countFS(plan.CheckpointPath)
 		wsFiles, _ := countFS(plan.WorkspacePath)
@@ -159,9 +182,12 @@ func doDryRun(plan rollback.Plan) error {
 // --- confirmation -----------------------------------------------------------
 
 func confirmPrompt(plan rollback.Plan) error {
-	if plan.Path != "" {
+	switch {
+	case plan.Path != "":
 		fmt.Printf("This will restore '%s' from checkpoint %s in:\n  %s\n", plan.Path, plan.Checkpoint, plan.WorkspacePath)
-	} else {
+	case plan.InPlace:
+		fmt.Printf("This will restore %d touched path(s) in your real repository at:\n  %s\nto their state at checkpoint %s from run %s.\nFiles outside that set are not affected.\n", len(plan.TouchedPaths), plan.WorkspacePath, plan.Checkpoint, plan.RunID)
+	default:
 		fmt.Printf("This will overwrite the workspace at:\n  %s\nwith checkpoint %s from run %s.\n", plan.WorkspacePath, plan.Checkpoint, plan.RunID)
 	}
 	fmt.Printf("This cannot be undone. Continue? [y/N] ")
