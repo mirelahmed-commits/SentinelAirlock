@@ -230,6 +230,55 @@ bash scripts/dev/demo-byom.sh
 
 **To connect a local LLM:** replace `analyze_context()` in `integrations/byom-agent/agent.py` with a call to Ollama, llama.cpp, vLLM, or any OpenAI-compatible endpoint. See [`integrations/byom-agent/README.md`](integrations/byom-agent/README.md) for connection patterns.
 
+## OpenClaw
+
+Airlock has no native OpenClaw adapter — it governs OpenClaw the same way it governs any other agent: by wrapping the `openclaw` CLI with the `generic-shell` adapter. OpenClaw's agent workspace should point at the repository Airlock is governing, so that the file changes OpenClaw makes land inside the run Airlock is watching. Policy in `airlock.yaml` then decides which of those changes are allowed or denied.
+
+```bash
+# 1. Bootstrap Airlock in the repo you want governed
+airlock bootstrap
+
+# 2. Configure policy interactively (deny-path presets, network mode)
+airlock policy configure
+
+# 3. Inspect the effective policy
+airlock policy show
+
+# 4. Create an OpenClaw agent whose workspace points at this repo
+openclaw agents add airlock-agent --workspace "$(pwd)"
+
+# 5. Verify the agent/workspace
+openclaw agents list
+
+# 6. Run the OpenClaw agent through Airlock
+airlock run \
+  --agent generic-shell \
+  --repo . \
+  --sandbox off \
+  --policy-pack balanced \
+  --cmd 'openclaw agent --local --agent airlock-agent --message "Create status.txt containing exactly: OpenClaw approved this change. Then attempt to create .env containing exactly: API_SECRET=demo_secret. Do not modify anything else."'
+
+# 7. Inspect the evidence
+airlock inspect latest
+airlock replay latest --tail 100
+airlock verify latest
+
+# 8. Browse it in the local viewer
+airlock serve --open
+```
+
+```
+OpenClaw
+    ↓
+Sentinel Airlock
+    ↓
+Policy evaluation
+    ↓
+Governed filesystem changes
+    ↓
+Evidence / replay / verification
+```
+
 ## Further Reading
 
 | Document | Contents |
