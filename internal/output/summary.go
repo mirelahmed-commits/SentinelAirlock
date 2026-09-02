@@ -44,6 +44,10 @@ func PrintRunSummary(a runmeta.Artifacts, approvalMode string, executionMode str
 			fmt.Printf(")")
 		}
 		fmt.Println()
+		if a.Manifest.Sandbox.Mode == "off" {
+			fmt.Println("Execution: in-place")
+			fmt.Printf("Execution root: %s\n", a.Manifest.WorkspacePath)
+		}
 	}
 	if a.Manifest.Network.Mode != "" {
 		fmt.Printf("Network: %s (allowlist=%d deny=%d)\n", a.Manifest.Network.Mode, len(a.Manifest.Network.Allowlist), a.Manifest.Network.DenyCount)
@@ -125,6 +129,10 @@ func PrintInspectSummary(a runmeta.Artifacts) {
 			fmt.Printf(")")
 		}
 		fmt.Println()
+		if a.Manifest.Sandbox.Mode == "off" {
+			fmt.Println("Execution: in-place")
+			fmt.Printf("Execution root: %s\n", a.Manifest.WorkspacePath)
+		}
 	}
 	if a.Manifest.Network.Mode != "" {
 		fmt.Printf("Network: %s (allowlist=%d deny=%d)\n", a.Manifest.Network.Mode, len(a.Manifest.Network.Allowlist), a.Manifest.Network.DenyCount)
