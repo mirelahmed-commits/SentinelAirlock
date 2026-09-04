@@ -177,7 +177,7 @@ func runCmd() *cobra.Command {
 			logger.Add(events.Event{TS: time.Now().UTC(), Type: "ADAPTER_SELECTED", Summary: "adapter selected", Meta: map[string]any{"name": adapter.Name(), "capabilities": capabilityMap(adapter.Capabilities())}})
 
 			ignore := []string{".git/**", ".airlock/**", "node_modules/**"}
-			if cfg != nil {
+			if cfg != nil && len(cfg.Workspace.Ignore) > 0 {
 				ignore = cfg.Workspace.Ignore
 			}
 
@@ -277,6 +277,14 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Seed the before-state cache so a denied write to a file that
+			// already existed in executionRoot (e.g. modified via
+			// --sandbox off, or already present in the staged workspace
+			// copy) reverts to its real prior content instead of being
+			// deleted outright.
+			if err := rec.Seed(); err != nil {
+				return err
+			}
 			if err := rec.Start(); err != nil {
 				return err
 			}
@@ -317,6 +325,13 @@ func runCmd() *cobra.Command {
 			}
 			logger.Add(events.Event{TS: time.Now().UTC(), Type: "AGENT_STDOUT", Summary: "agent output", Meta: map[string]any{"stdout": out}})
 
+			// The command has exited, but fsnotify delivery is asynchronous —
+			// its last write(s) may not have reached the recorder's goroutine
+			// yet. Stopping immediately can silently drop trailing events
+			// (including a denial that should have been reverted). Give the
+			// OS/recorder a short bounded window to catch up before tearing
+			// the watcher down.
+			time.Sleep(150 * time.Millisecond)
 			_ = rec.Stop()
 
 			evs := logger.EventsSnapshot()
