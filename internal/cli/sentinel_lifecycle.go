@@ -61,15 +61,30 @@ func writeSentinelMeta(repoAbs string, m sentinelMeta) error {
 }
 
 func readSentinelMeta(repoAbs string) (sentinelMeta, bool) {
+	m, ok, _ := readSentinelMetaDetailed(repoAbs)
+	return m, ok
+}
+
+func readSentinelMetaDetailed(repoAbs string) (sentinelMeta, bool, error) {
 	var m sentinelMeta
 	b, err := os.ReadFile(sentinelMetaPath(repoAbs))
 	if err != nil {
-		return m, false
+		if os.IsNotExist(err) {
+			return m, false, nil
+		}
+		return m, false, fmt.Errorf("read sentinel lifecycle metadata: %w", err)
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
-		return m, false
+		return m, false, fmt.Errorf("parse sentinel lifecycle metadata: %w", err)
 	}
-	return m, true
+	if m.PID <= 0 || m.Repo == "" || m.Session == "" || filepath.Base(m.Session) != m.Session {
+		return m, false, fmt.Errorf("sentinel lifecycle metadata is incomplete or malformed")
+	}
+	recordedRepo, err := filepath.Abs(m.Repo)
+	if err != nil || filepath.Clean(recordedRepo) != filepath.Clean(repoAbs) {
+		return m, false, fmt.Errorf("sentinel lifecycle repository does not match viewer repository")
+	}
+	return m, true, nil
 }
 
 func removeSentinelMeta(repoAbs string) {
@@ -81,15 +96,23 @@ func removeSentinelMeta(repoAbs string) {
 // live process holds it. A stale metadata file (process gone, e.g. after a
 // crash) is cleaned up and reported as not running.
 func runningSentinel(repoAbs string) (sentinelMeta, bool) {
-	m, ok := readSentinelMeta(repoAbs)
+	m, ok, _ := runningSentinelDetailed(repoAbs)
+	return m, ok
+}
+
+func runningSentinelDetailed(repoAbs string) (sentinelMeta, bool, error) {
+	m, ok, err := readSentinelMetaDetailed(repoAbs)
+	if err != nil {
+		return sentinelMeta{}, false, err
+	}
 	if !ok {
-		return sentinelMeta{}, false
+		return sentinelMeta{}, false, nil
 	}
 	if !processAlive(m.PID) {
 		removeSentinelMeta(repoAbs)
-		return sentinelMeta{}, false
+		return sentinelMeta{}, false, nil
 	}
-	return m, true
+	return m, true, nil
 }
 
 // startSentinelBackground launches a detached child running the foreground

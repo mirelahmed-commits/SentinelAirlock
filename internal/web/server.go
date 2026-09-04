@@ -25,34 +25,60 @@ import (
 )
 
 type Server struct {
-	readOnly     bool
-	shutdownFunc func() // called by the Stop Viewer UI action; nil-safe
+	readOnly       bool
+	shutdownFunc   func() // called by the Stop Viewer UI action; nil-safe
+	repoPath       string
+	sentinelStatus SentinelStatusFunc
+	sentinelStop   SentinelStopFunc
+}
+
+// ServerOptions carries the viewer's resolved repository context and trusted
+// lifecycle operations. Sentinel controls are callbacks supplied by the CLI so
+// the browser can never select a repository or PID to inspect/stop.
+type ServerOptions struct {
+	ReadOnly       bool
+	ShutdownFunc   func()
+	RepoPath       string
+	SentinelStatus SentinelStatusFunc
+	SentinelStop   SentinelStopFunc
 }
 
 type runCard struct {
-	RunID        string
-	Title        string
-	Subtitle     string
-	Command      string
-	Outcome      string
-	OutcomeClass string
-	Adapter      string
-	When         string
-	RiskSummary  string
-	FilesChanged int
-	Blocked      int
-	ReviewState  string
-	VerifyState  string
-	Signed       bool
-	HasRollback  bool
-	Target       string
-	Mode         string
+	RunID         string
+	Title         string
+	Subtitle      string
+	Command       string
+	Outcome       string
+	OutcomeClass  string
+	Adapter       string
+	When          string
+	RiskSummary   string
+	FilesChanged  int
+	Blocked       int
+	ReviewState   string
+	VerifyState   string
+	Signed        bool
+	HasRollback   bool
+	Target        string
+	Mode          string
+	Sandbox       string
+	PolicyPack    string
+	DenyRuleCount int
+	SentinelState string
+	ReplayURL     string
+	RunURL        string
+	ExportCmd     string
+	RollbackCmd   string
+}
+
+type policyView struct {
+	Pack         string
+	Network      string
 	Sandbox      string
-	PolicyPack   string
-	ReplayURL    string
-	RunURL       string
-	ExportCmd    string
-	RollbackCmd  string
+	EnvAllowlist []string
+	DenyRules    []string
+	AllowRules   []string
+	HasDenyRules bool
 }
 
 type timelineStep struct {
@@ -75,7 +101,26 @@ func Start(listen string, openBrowser bool, readOnly bool) error {
 }
 
 func StartOnListener(ln net.Listener, openBrowser bool, readOnly bool, shutdownFunc func()) error {
-	s := &Server{readOnly: readOnly, shutdownFunc: shutdownFunc}
+	repoPath, _ := filepath.Abs(".")
+	return StartOnListenerWithOptions(ln, openBrowser, ServerOptions{
+		ReadOnly: readOnly, ShutdownFunc: shutdownFunc, RepoPath: repoPath,
+	})
+}
+
+// StartOnListenerWithOptions is the repository-aware viewer entry point. The
+// original StartOnListener remains as a compatibility wrapper for callers that
+// do not need Sentinel lifecycle controls.
+func StartOnListenerWithOptions(ln net.Listener, openBrowser bool, opts ServerOptions) error {
+	s := &Server{
+		readOnly:       opts.ReadOnly,
+		shutdownFunc:   opts.ShutdownFunc,
+		repoPath:       opts.RepoPath,
+		sentinelStatus: opts.SentinelStatus,
+		sentinelStop:   opts.SentinelStop,
+	}
+	if s.repoPath == "" {
+		s.repoPath, _ = filepath.Abs(".")
+	}
 	mux := http.NewServeMux()
 	s.register(mux)
 	url := "http://" + ln.Addr().String()
@@ -97,6 +142,8 @@ func (s *Server) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/compare/", s.handleAPICompare)
 	mux.HandleFunc("/api/viewer", s.handleAPIViewer)
 	mux.HandleFunc("/api/viewer/stop", s.handleAPIViewerStop)
+	mux.HandleFunc("/api/sentinel", s.handleAPISentinel)
+	mux.HandleFunc("/api/sentinel/stop", s.handleAPISentinelStop)
 }
 
 func (s *Server) handleRunsPage(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +162,13 @@ func (s *Server) handleRunsPage(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		card := deriveRunCard(a)
+		if card.Mode == "sentinel" {
+			if s.sentinelRollbackBlocked(a.Manifest) {
+				card.SentinelState = "active"
+			} else {
+				card.SentinelState = "stopped"
+			}
+		}
 
 		if reviewFilter != "" && card.ReviewState != reviewFilter {
 			continue
@@ -202,6 +256,15 @@ button{padding:6px 10px;border:0;background:#0f172a;color:#fff;border-radius:8px
 .statusline .sep{opacity:.4}
 .update-banner{display:none;position:sticky;top:0;z-index:10;background:#ddf4ff;border:1px solid #54aeff;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:14px;font-weight:600}
 .update-banner.show{display:block}
+.sentinel-shell{background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:16px;padding:18px;margin:12px 0 18px;box-shadow:0 10px 28px rgba(15,23,42,.12)}
+.sentinel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}.sentinel-kicker{font-size:11px;font-weight:800;letter-spacing:.13em;color:#94a3b8}.sentinel-title{font-size:22px;font-weight:750;margin-top:3px}.sentinel-status{display:inline-flex;align-items:center;gap:7px;border:1px solid #475569;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:800;letter-spacing:.04em}.sentinel-status.active{background:#052e2b;border-color:#0f766e;color:#99f6e4}.sentinel-status.stopped{background:#312e1e;border-color:#a16207;color:#fde68a}.sentinel-status.inactive{background:#1e293b;color:#cbd5e1}.sentinel-dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.sentinel-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.sentinel-field{min-width:0;background:rgba(255,255,255,.035);border:1px solid #293548;border-radius:10px;padding:10px}.sentinel-field .k{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8}.sentinel-field .v{font-size:13px;font-weight:650;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sentinel-semantics{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:12px;padding:10px 12px;border:1px solid #293548;border-radius:10px;background:#111c2e}.sentinel-flow{font-weight:750;color:#f8fafc}.sentinel-copy{font-size:12px;color:#94a3b8;text-align:right}.sentinel-policy{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.sentinel-policy span{border:1px solid #334155;border-radius:999px;padding:3px 8px;font-size:11px;color:#cbd5e1}.sentinel-warning,.sentinel-error{margin-top:10px;padding:9px 11px;border-radius:9px;font-size:12px}.sentinel-warning{background:#3a2c12;border:1px solid #854d0e;color:#fde68a}.sentinel-error{background:#3b1318;border:1px solid #991b1b;color:#fecaca}
+.sentinel-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:16px}.sentinel-bar h3{font-size:13px;letter-spacing:.05em;text-transform:uppercase;margin:0;color:#cbd5e1}.sentinel-controls,.sentinel-filters{display:flex;gap:6px;flex-wrap:wrap}.sentinel-shell button,.sentinel-shell a.sentinel-btn{border:1px solid #475569;background:#1e293b;color:#e2e8f0;border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none;cursor:pointer}.sentinel-shell button:hover,.sentinel-shell a.sentinel-btn:hover{background:#334155}.sentinel-shell button.danger{border-color:#b91c1c;color:#fecaca}.sentinel-shell button[disabled]{opacity:.55;cursor:not-allowed}.sentinel-filter.selected{background:#e2e8f0;color:#0f172a;border-color:#e2e8f0}
+.sentinel-activity{margin-top:9px;border:1px solid #293548;border-radius:10px;overflow:hidden}.activity-row{display:grid;grid-template-columns:86px minmax(120px,1fr) 76px minmax(130px,auto);gap:10px;align-items:center;padding:9px 11px;border-top:1px solid #293548;font-size:12px}.activity-row:first-child{border-top:0}.activity-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.activity-op{color:#94a3b8;font-size:11px}.activity-state{display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap}.activity-badge{border-radius:999px;padding:2px 7px;font-weight:800;font-size:10px;letter-spacing:.035em}.activity-badge.allow{background:#064e3b;color:#a7f3d0}.activity-badge.deny{background:#7f1d1d;color:#fecaca}.activity-badge.reverted{background:#1e3a5f;color:#bfdbfe}.activity-badge.failed{background:#7c2d12;color:#ffedd5}.sentinel-empty{padding:18px;color:#94a3b8;text-align:center;font-size:13px}.sentinel-command{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#020617;border:1px solid #334155;border-radius:8px;padding:9px 11px;margin-top:12px;color:#cbd5e1;overflow:auto}
+@media(max-width:850px){.sentinel-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.activity-row{grid-template-columns:70px minmax(100px,1fr) 62px}.activity-state{grid-column:2/4;justify-content:flex-start}.sentinel-copy{text-align:left}}
+@media(max-width:520px){body{margin:14px}.sentinel-grid{grid-template-columns:1fr}.sentinel-semantics{align-items:flex-start;flex-direction:column}.activity-row{grid-template-columns:64px minmax(0,1fr)}.activity-op{grid-column:2}.activity-state{grid-column:2}}
+@media(prefers-color-scheme:dark){body{background:#07111f;color:#e5e7eb}.card,.filters,.stat{background:#101b2b;border-color:#28364a}.subtitle,.meta,.muted,.small,.statusline{color:#94a3b8}input,select{background:#0f172a;color:#e5e7eb;border-color:#475569}.viewer-panel{background:#101b2b;color:#e5e7eb}}
 </style></head><body data-fingerprint="{{.Fingerprint}}" data-readonly="{{if .ReadOnly}}1{{else}}0{{end}}">
 <div class="update-banner" id="update-banner">Runs updated. Refreshing…</div>
 <h1>Sentinel Airlock Runs</h1>
@@ -226,6 +289,10 @@ button{padding:6px 10px;border:0;background:#0f172a;color:#fff;border-radius:8px
   <span class="sep">·</span><span>auto-refresh <span id="refresh-status">on</span></span>
   <span class="sep">·</span><span>last checked <span class="small" id="last-checked">—</span></span>
 </div>
+
+<section class="sentinel-shell" id="sentinel-panel" aria-live="polite" aria-label="Sentinel status">
+  <div class="sentinel-empty">Checking Sentinel status&#8230;</div>
+</section>
 
 <div class="row">
   <div class="stat">total {{.Summary.total}}</div>
@@ -258,6 +325,8 @@ button{padding:6px 10px;border:0;background:#0f172a;color:#fff;border-radius:8px
     <span class="badge {{verifyClass .VerifyState}}">{{.VerifyState}}</span>
     <span class="badge {{if .Signed}}ok{{else}}mutedb{{end}}">{{if .Signed}}signed{{else}}unsigned{{end}}</span>
     <span class="badge mutedb">{{.Target}}</span>
+    {{if .SentinelState}}<span class="badge {{if eq .SentinelState "active"}}ok{{else}}mutedb{{end}}">sentinel: {{.SentinelState}}</span>{{end}}
+    {{if gt .DenyRuleCount 0}}<span class="badge mutedb">deny: {{.DenyRuleCount}}</span>{{else}}<span class="badge mutedb" style="opacity:.6">no path denies</span>{{end}}
     {{if .HasRollback}}<span class="badge warn">rolled back</span>{{end}}
   </div>
   <div class="meta">{{.When}} · adapter={{.Adapter}} · sandbox={{.Sandbox}} · pack={{.PolicyPack}}</div>
@@ -343,6 +412,53 @@ document.addEventListener("click",function(e){
   var panel=document.getElementById("viewer-panel");
   if(wrap&&panel&&!wrap.contains(e.target)&&panel.style.display!=="none"){panel.style.display="none";}
 });
+var sentinelFilter="all";
+function sentinelEsc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
+function sentinelTime(v){if(!v)return "—";var d=new Date(v);return isNaN(d.getTime())?v:d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"});}
+function setSentinelFilter(v){sentinelFilter=v;loadSentinel();}
+function sentinelActivityHTML(items,active){
+  var shown=(items||[]).filter(function(a){
+    if(sentinelFilter==="allowed")return a.decision==="allow";
+    if(sentinelFilter==="denied")return a.decision==="deny";
+    if(sentinelFilter==="reverted")return a.revert_state==="reverted";
+    if(sentinelFilter==="failed")return a.revert_state==="failed";
+    return true;
+  });
+  if(!shown.length)return "<div class='sentinel-empty'>"+((items||[]).length?"No activity matches this filter.":(active?"Sentinel is active. Waiting for filesystem activity.":"No filesystem activity was recorded for this session."))+"</div>";
+  return shown.map(function(a){
+    var badges="<span class='activity-badge "+(a.decision==="deny"?"deny":"allow")+"'>"+sentinelEsc((a.decision||"allow").toUpperCase())+"</span>";
+    if(a.revert_state==="reverted")badges+="<span class='activity-badge reverted'>REVERTED</span>";
+    if(a.revert_state==="failed")badges+="<span class='activity-badge failed' title='"+sentinelEsc(a.revert_error||"Revert failed")+"'>REVERT FAILED</span>";
+    return "<div class='activity-row'><span>"+sentinelTime(a.timestamp)+"</span><span class='activity-path' title='"+sentinelEsc(a.path)+"'>"+sentinelEsc(a.path)+"</span><span class='activity-op'>"+sentinelEsc(a.operation||"WRITE")+"</span><span class='activity-state'>"+badges+"</span></div>";
+  }).join("");
+}
+function renderSentinel(d){
+  var panel=document.getElementById("sentinel-panel");if(!panel)return;
+  var state=d.state||"inactive", active=!!d.running;
+  var h="<div class='sentinel-head'><div><div class='sentinel-kicker'>SENTINEL</div><div class='sentinel-title'>Repository governance</div></div><span class='sentinel-status "+sentinelEsc(state)+"'><span class='sentinel-dot'></span>"+sentinelEsc(state.toUpperCase())+"</span></div>";
+  h+="<div class='sentinel-grid'><div class='sentinel-field'><div class='k'>Repository</div><div class='v' title='"+sentinelEsc(d.repo)+"'>"+sentinelEsc(d.repo||"—")+"</div></div><div class='sentinel-field'><div class='k'>Session</div><div class='v' title='"+sentinelEsc(d.session_id)+"'>"+sentinelEsc(d.session_id||"—")+"</div></div><div class='sentinel-field'><div class='k'>PID / uptime</div><div class='v'>"+(active?sentinelEsc(d.pid)+" · "+sentinelEsc(d.uptime||"—"):"—")+"</div></div><div class='sentinel-field'><div class='k'>Started</div><div class='v' title='"+sentinelEsc(d.started_at)+"'>"+sentinelEsc(d.started_at||"—")+"</div></div></div>";
+  h+="<div class='sentinel-semantics'><span class='sentinel-flow'>"+sentinelEsc(d.enforcement)+"</span><span class='sentinel-copy'>"+sentinelEsc(d.semantics)+"</span></div>";
+  if(d.session_id){h+="<div class='sentinel-policy'><span>Policy pack: "+sentinelEsc(d.policy&&d.policy.pack||"project")+"</span><span>Allow rules: "+sentinelEsc(d.policy&&d.policy.allow_rules||0)+"</span><span>Deny rules: "+sentinelEsc(d.policy&&d.policy.deny_rules||0)+"</span><span>Status: "+sentinelEsc(d.status)+"</span></div>";}
+  if(d.session_id&&d.policy&&d.policy.deny_rules===0)h+="<div class='sentinel-warning'>No explicit path deny rules are configured for this session.</div>";
+  (d.errors||[]).forEach(function(e){h+="<div class='sentinel-error'>"+sentinelEsc(e)+"</div>";});
+  if(!d.session_id){h+="<div class='sentinel-command'>airlock sentinel --repo . --background</div>";panel.innerHTML=h;return;}
+  h+="<div class='sentinel-bar'><h3>Recent Sentinel activity</h3><div class='sentinel-controls'><a class='sentinel-btn' href='/runs/"+encodeURIComponent(d.session_id)+"'>Open session</a><button type='button' onclick='loadSentinel()'>Refresh</button>";
+  if(active&&!d.read_only)h+="<button class='danger' id='sentinel-stop' type='button' onclick='stopSentinel()'>Stop Sentinel</button>";
+  h+="</div></div><div class='sentinel-bar'><div class='sentinel-filters'>";
+  [["all","All"],["allowed","Allowed"],["denied","Denied"],["reverted","Reverted"],["failed","Revert failed"]].forEach(function(f){h+="<button type='button' class='sentinel-filter "+(sentinelFilter===f[0]?"selected":"")+"' onclick=\"setSentinelFilter('"+f[0]+"')\">"+f[1]+"</button>";});
+  h+="</div></div><div class='sentinel-activity'>"+sentinelActivityHTML(d.recent_activity,active)+"</div>";
+  if(!active)h+="<div class='sentinel-command'>airlock sentinel --repo . --background</div>";
+  panel.innerHTML=h;
+}
+function loadSentinel(){
+  fetch("/api/sentinel",{cache:"no-store"}).then(function(r){return r.ok?r.json():Promise.reject(r.status);}).then(renderSentinel).catch(function(){var p=document.getElementById("sentinel-panel");if(p)p.innerHTML="<div class='sentinel-error'>Sentinel status could not be refreshed. The viewer will retry automatically.</div>";});
+}
+function stopSentinel(){
+  if(!confirm("Stop Sentinel for this repository?\n\nPending filesystem evaluations will drain and final evidence will be flushed."))return;
+  var b=document.getElementById("sentinel-stop");if(b){b.disabled=true;b.textContent="Stopping…";}
+  fetch("/api/sentinel/stop",{method:"POST",cache:"no-store"}).then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error(t);});return r.json();}).then(function(){loadSentinel();}).catch(function(e){alert("Sentinel stop failed. "+e.message);loadSentinel();});
+}
+loadSentinel();setInterval(loadSentinel,2000);
 </script>
 </body></html>`))
 
@@ -409,6 +525,8 @@ func (s *Server) handleRunPage(w http.ResponseWriter, r *http.Request) {
 		Reason      string
 		Risk        string
 		Explanation string
+		RevertState string
+		RevertError string
 	}
 	var deniedItems []deniedItem
 	for _, e := range a.Events {
@@ -424,6 +542,17 @@ func (s *Server) handleRunPage(w http.ResponseWriter, r *http.Request) {
 		if lvl, ok := e.Risk["level"].(string); ok {
 			di.Risk = lvl
 		}
+		if reverted, ok := e.Meta["reverted"].(bool); ok {
+			if reverted {
+				di.RevertState = "reverted"
+			} else {
+				di.RevertState = "failed"
+			}
+		}
+		if revertErr, ok := e.Meta["revert_error"].(string); ok && revertErr != "" {
+			di.RevertState = "failed"
+			di.RevertError = revertErr
+		}
 		di.Explanation = webDenyExplanation(di.Reason)
 		deniedItems = append(deniedItems, di)
 	}
@@ -436,7 +565,21 @@ func (s *Server) handleRunPage(w http.ResponseWriter, r *http.Request) {
 
 	// Next-step guidance from observable state.
 	hasCheckpoint := len(a.Manifest.Checkpoints) > 0
+	isSentinel := a.Manifest.ExecutionMode == "sentinel"
+	inPlace := a.Manifest.Sandbox.Mode == "off"
+	activeSentinel := s.sentinelRollbackBlocked(a.Manifest)
 	ns := computeNextStep(runID, rv.State, vr.Status, rollbackData != nil, len(deniedItems) > 0, hasCheckpoint, s.readOnly)
+	if activeSentinel {
+		ns = nextStep{
+			Headline: "Sentinel is actively monitoring this repository",
+			Detail:   "Evidence updates as filesystem activity arrives. Stop Sentinel before using rollback.",
+			Command:  "airlock replay " + runID + " --tail 100",
+			Class:    "ok",
+		}
+	} else if inPlace {
+		ns.Detail = strings.ReplaceAll(ns.Detail, "the isolated Airlock workspace", "this in-place session")
+		ns.Detail = strings.ReplaceAll(ns.Detail, "the Airlock workspace", "the real repository's touched paths")
+	}
 
 	// Rollback flash (from the POST redirect) and the unmistakable top-level
 	// rollback state: unavailable | available | complete | failed.
@@ -450,6 +593,9 @@ func (s *Server) handleRunPage(w http.ResponseWriter, r *http.Request) {
 		rollbackState = "failed"
 	case hasCheckpoint:
 		rollbackState = "available"
+	}
+	if activeSentinel && rollbackData == nil {
+		rollbackState = "unavailable"
 	}
 
 	// Live state fingerprint for auto-refresh polling.
@@ -687,6 +833,7 @@ a:hover{text-decoration:underline}
     {{if .Rollback}}<span class="badge warn">rolled back ({{.Rollback.Mode}})</span>{{else if eq .RollbackState "available"}}<span class="badge warn">rollback available</span>{{end}}
     <span class="badge mutedb">{{.Manifest.Adapter.Name}}</span>
     <span class="badge mutedb">sandbox: {{.Manifest.Sandbox.Mode}}</span>
+    {{if .IsSentinel}}<span class="badge {{if .ActiveSentinel}}ok{{else}}mutedb{{end}}">sentinel: {{if .ActiveSentinel}}active{{else}}stopped{{end}}</span>{{end}}
   </div>
   <div style="margin-top:14px">
     <h2 style="margin-bottom:8px">Actions</h2>
@@ -695,7 +842,7 @@ a:hover{text-decoration:underline}
       <a class="btn secondary" href="#timeline">Replay</a>
       <a class="btn secondary" href="#patch">Review patch</a>
       <a class="btn secondary" href="#denied">Denied writes</a>
-      {{if .HasCheckpoint}}<a class="btn secondary" href="#rollback">{{if .ReadOnly}}Rollback instructions{{else}}Restore workspace{{end}}</a>{{end}}
+		{{if .HasCheckpoint}}{{if .ActiveSentinel}}<span class="btn secondary disabled" aria-disabled="true">Rollback unavailable</span>{{else}}<a class="btn secondary" href="#rollback">{{if .ReadOnly}}Rollback instructions{{else}}{{if .InPlace}}Restore touched paths{{else}}Restore workspace{{end}}{{end}}</a>{{end}}{{end}}
       <a class="btn secondary" href="#review">{{if .ReadOnly}}Review command{{else}}Review{{end}}</a>
       <a class="btn secondary" href="/api/runs/{{.RunID}}/verify" target="_blank">Verify status ↗</a>
     </div>
@@ -721,6 +868,8 @@ a:hover{text-decoration:underline}
     <div class="field"><div class="k">Sandbox</div><div class="v">{{.Manifest.Sandbox.Mode}}</div></div>
     <div class="field"><div class="k">Network</div><div class="v">{{.Manifest.Network.Mode}}</div></div>
     <div class="field"><div class="k">Mode</div><div class="v">{{.Manifest.ExecutionMode}}</div></div>
+    {{if .IsSentinel}}<div class="field"><div class="k">Repository</div><div class="v mono" title="{{.Manifest.WorkspacePath}}">{{.Manifest.WorkspacePath}}</div></div>
+    <div class="field"><div class="k">Session status</div><div class="v">{{if .ActiveSentinel}}active{{else}}{{if .Manifest.Status.Terminal}}{{.Manifest.Status.Terminal}}{{else}}stopped{{end}}{{end}}</div></div>{{end}}
     <div class="field"><div class="k">Policy pack</div><div class="v">{{if .Manifest.PolicyPack.Name}}{{.Manifest.PolicyPack.Name}}{{else}}—{{end}}</div></div>
     <div class="field"><div class="k">Target</div><div class="v">{{if .Manifest.Execution.Target}}{{.Manifest.Execution.Target}}{{else}}local{{end}}</div></div>
   </div>
@@ -728,6 +877,28 @@ a:hover{text-decoration:underline}
   <div style="margin-top:12px">
     <div class="k" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px">Command</div>
     <pre>{{.Manifest.Invocation.DisplayCommand}}</pre>
+  </div>
+  {{end}}
+</div>
+
+<!-- ── Effective policy ── -->
+<div class="section" id="policy">
+  <h2>Effective policy</h2>
+  <div class="grid">
+    <div class="field"><div class="k">Policy pack</div><div class="v">{{if .Policy.Pack}}{{.Policy.Pack}}{{else}}—{{end}}</div></div>
+    <div class="field"><div class="k">Network</div><div class="v">{{if .Policy.Network}}{{.Policy.Network}}{{else}}off{{end}}</div></div>
+    <div class="field"><div class="k">Sandbox</div><div class="v">{{if .Policy.Sandbox}}{{.Policy.Sandbox}}{{else}}—{{end}}</div></div>
+    <div class="field"><div class="k">Env allowlist</div><div class="v">{{if .Policy.EnvAllowlist}}{{len .Policy.EnvAllowlist}} variable(s){{else}}none{{end}}</div></div>
+    <div class="field"><div class="k">Deny rules</div><div class="v">{{if .Policy.HasDenyRules}}{{len .Policy.DenyRules}} configured{{else}}none configured{{end}}</div></div>
+  </div>
+  {{if .Policy.HasDenyRules}}
+  <details style="margin-top:10px"><summary class="small">Configured deny rules ({{len .Policy.DenyRules}})</summary>
+    <ul style="margin:6px 0;padding-left:18px">{{range .Policy.DenyRules}}<li class="mono small">{{.}}</li>{{end}}</ul>
+  </details>
+  {{else}}
+  <div class="caveat" style="margin-top:10px">
+    No explicit path deny rules are configured. Files such as <span class="mono">.env</span> are not automatically blocked unless your effective policy defines a matching deny rule.
+    <div class="hint" style="margin-top:6px">airlock policy show</div>
   </div>
   {{end}}
 </div>
@@ -816,16 +987,17 @@ a:hover{text-decoration:underline}
 <div class="section" id="denied">
   <h2>Denied / reverted writes</h2>
   {{if .DeniedItems}}
-  <table>
-    <tr><th>Path</th><th>Risk</th><th>Reason</th></tr>
+	<table>
+		<tr><th>Path</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
     {{range .DeniedItems}}
     <tr class="deny-row">
       <td>
         <div class="mono">{{if .Path}}{{.Path}}{{else}}—{{end}}</div>
         {{if .Explanation}}<div class="deny-explanation">{{.Explanation}}</div>{{end}}
       </td>
-      <td>{{if .Risk}}<span class="badge {{riskClass .Risk}}">{{.Risk}}</span>{{else}}—{{end}}</td>
-      <td class="mono">{{if .Reason}}{{.Reason}}{{else}}policy deny{{end}}</td>
+			<td>{{if .Risk}}<span class="badge {{riskClass .Risk}}">{{.Risk}}</span>{{else}}—{{end}}</td>
+			<td>{{if eq .RevertState "reverted"}}<span class="badge ok">DENY → REVERTED</span>{{else if eq .RevertState "failed"}}<span class="badge bad" title="{{.RevertError}}">DENY → REVERT FAILED</span>{{else}}<span class="badge bad">DENY</span>{{end}}</td>
+			<td class="mono">{{if .Reason}}{{.Reason}}{{else}}policy deny{{end}}</td>
     </tr>
     {{end}}
   </table>
@@ -857,9 +1029,13 @@ a:hover{text-decoration:underline}
   </div>
   {{end}}
   <div class="caveat">
+    {{if .InPlace}}
+    <strong>What rollback restored:</strong> the recorded touched paths in the real repository at <span class="mono">{{.Manifest.WorkspacePath}}</span> from checkpoint cp-0.
+    {{else}}
     <strong>What rollback restored:</strong> the <em>Airlock workspace</em> at
     <span class="mono">.airlock/workspaces/{{.RunID}}/repo</span> — the isolated copy the agent ran in.
     <br>Rollback restores the Airlock workspace, <strong>not your original repo</strong>. Your original source directory was not modified at any point by Airlock.
+    {{end}}
     <br>Review state is now <strong>needs-attention</strong> — this run requires re-review before approving.
     Digest was rebuilt after rollback; run <span class="mono">airlock verify {{.RunID}}</span> to confirm integrity.
     <br>Use the patch / export / review workflow before applying any changes back to your source.
@@ -867,14 +1043,31 @@ a:hover{text-decoration:underline}
   </div>
 </div>
 {{else if .Manifest.Checkpoints}}
+{{if .ActiveSentinel}}
+<div class="section rollback-section" id="rollback">
+  <h2>Rollback unavailable while Sentinel is active</h2>
+  <p class="muted" style="margin:0 0 10px;font-size:14px">Stop Sentinel before rollback. Restorative writes are filesystem mutations and an active watcher would observe and re-evaluate them.</p>
+  <button class="btn disabled" type="button" disabled aria-disabled="true">Restore checkpoint</button>
+  <span class="btn-label">Stop Sentinel before rollback</span>
+</div>
+{{else}}
 <div class="section" id="rollback">
   <h2>{{if .ReadOnly}}Rollback instructions — checkpoint cp-0{{else}}Rollback available — restore workspace from cp-0{{end}}</h2>
+  {{if .InPlace}}
+  <p class="muted" style="margin:0 0 10px;font-size:14px">Airlock captured a checkpoint before this in-place session. Rollback restores only this session's touched paths in the real repository.</p>
+  <div class="grid" style="margin-bottom:10px">
+    <div class="field"><div class="k">Repository</div><div class="v small mono">{{.Manifest.WorkspacePath}}</div></div>
+    <div class="field"><div class="k">Restore scope</div><div class="v small">{{len .Manifest.TouchedPaths}} touched path(s)</div></div>
+    <div class="field"><div class="k">Checkpoint</div><div class="v small mono">.airlock/runs/{{.RunID}}/checkpoints/cp-0</div></div>
+  </div>
+  {{else}}
   <p class="muted" style="margin:0 0 10px;font-size:14px">Airlock captured a checkpoint before the agent ran. You can restore the isolated Airlock workspace to that checkpoint. This does not modify your original repo.</p>
   <div class="grid" style="margin-bottom:10px">
     <div class="field"><div class="k">Original repo</div><div class="v small">Your source directory — never touched by Airlock or rollback.</div></div>
     <div class="field"><div class="k">Airlock workspace</div><div class="v small mono">.airlock/workspaces/{{.RunID}}/repo</div></div>
     <div class="field"><div class="k">Checkpoint</div><div class="v small mono">.airlock/runs/{{.RunID}}/checkpoints/cp-0</div></div>
   </div>
+  {{end}}
   <div class="hint" style="margin-top:4px"># 1. preview what would be restored (no changes made — always start here):
 ./airlock rollback {{.RunID}} --dry-run
 
@@ -884,14 +1077,18 @@ a:hover{text-decoration:underline}
 # 3. restore a single path only:
 ./airlock rollback {{.RunID}} --path src/changed-file.txt --force</div>
   <div class="caveat">
+    {{if .InPlace}}
+    <strong>Rollback modifies the real repository.</strong> It restores only paths touched during this in-place session from checkpoint cp-0; unrelated paths and Git history are left alone.
+    {{else}}
     <strong>Rollback restores the Airlock workspace, not your original repo.</strong>
     It rewinds <span class="mono">.airlock/workspaces/{{.RunID}}/repo</span> to checkpoint cp-0. Your original source directory is never modified by Airlock.
+    {{end}}
     <br>Use the patch / export / review workflow before applying any changes back to your source.
     After rollback: review state becomes needs-attention, digest is rebuilt, report is regenerated.
     Operation-level rollback (last N operations) is future work.
   </div>
   {{if not .ReadOnly}}
-  <form method="post" action="/api/runs/{{.RunID}}/rollback" style="margin-top:12px" onsubmit="if(!confirm('Restore Airlock workspace from checkpoint cp-0?\n\nThis affects only .airlock/workspaces/{{.RunID}}/repo.\nYour original repo will not be modified.\nReview will reset to needs-attention.\n\nProceed?')){return false;} var b=document.getElementById('rollback-btn'); b.disabled=true; b.textContent='Restoring…'; var n=document.getElementById('rollback-pending'); if(n){n.style.display='block';} return true;">
+	<form method="post" action="/api/runs/{{.RunID}}/rollback" style="margin-top:12px" onsubmit="if(!confirm('Restore this session from checkpoint cp-0?\n\nUse the restore scope shown above to confirm what will be modified.\nReview will reset to needs-attention.\n\nProceed?')){return false;} var b=document.getElementById('rollback-btn'); b.disabled=true; b.textContent='Restoring…'; var n=document.getElementById('rollback-pending'); if(n){n.style.display='block';} return true;">
     <label style="font-size:13px">checkpoint
       <select name="checkpoint">
         {{range .Manifest.Checkpoints}}<option value="{{.ID}}">{{.ID}}</option>{{end}}
@@ -905,6 +1102,7 @@ a:hover{text-decoration:underline}
   {{if .ReadOnly}}<div class="hint" style="margin-top:8px"># read-only viewer — run one of the rollback commands above in a terminal</div>{{end}}
   <div class="small" style="margin-top:10px;color:var(--muted)">After running a rollback command, this page will update automatically or show a refresh notice.</div>
 </div>
+{{end}}
 {{else}}
 <div class="section" id="rollback">
   <h2>Rollback</h2>
@@ -1052,6 +1250,16 @@ document.addEventListener("click",function(e){
 		}
 	}
 
+	pol := policyView{
+		Pack:         a.Manifest.PolicyPack.Name,
+		Network:      a.Manifest.PolicySummary.Network,
+		Sandbox:      a.Manifest.Sandbox.Mode,
+		EnvAllowlist: a.Manifest.Env.Allowed,
+		DenyRules:    a.Manifest.PolicySummary.DenyWrite,
+		AllowRules:   a.Manifest.PolicySummary.AllowWrite,
+		HasDenyRules: len(a.Manifest.PolicySummary.DenyWrite) > 0,
+	}
+
 	data := map[string]any{
 		"RunID":              runID,
 		"Manifest":           a.Manifest,
@@ -1076,6 +1284,10 @@ document.addEventListener("click",function(e){
 		"RollbackState":      rollbackState,
 		"RollbackFlash":      rollbackFlash,
 		"RollbackReason":     rollbackReason,
+		"Policy":             pol,
+		"IsSentinel":         isSentinel,
+		"InPlace":            inPlace,
+		"ActiveSentinel":     activeSentinel,
 	}
 
 	// Buffer template execution so a type-mismatch or other template error never
@@ -1237,6 +1449,11 @@ func (s *Server) handleAPIRunRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", 405)
+			return
+		}
+		if s.sentinelRollbackBlocked(a.Manifest) {
+			reason := "Stop Sentinel before rollback"
+			http.Redirect(w, r, "/runs/"+runID+"?rollback=error&reason="+url.QueryEscape(reason)+"#rollback", http.StatusSeeOther)
 			return
 		}
 		checkpoint := strings.TrimSpace(r.FormValue("checkpoint"))
@@ -1416,15 +1633,15 @@ func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
 func webDenyExplanation(reason string) string {
 	switch {
 	case strings.HasPrefix(reason, "deny_write"):
-		return "Path matched a deny_write policy rule. Write was blocked and reverted in the Airlock workspace."
+		return "Path matched a deny_write policy rule. Airlock attempted a best-effort restore of the previous state."
 	case strings.HasPrefix(reason, "allow_write"):
-		return "Path was not in the allow_write whitelist. Write was blocked and reverted in the Airlock workspace."
+		return "Path was not in the allow_write whitelist. Airlock attempted a best-effort restore of the previous state."
 	case strings.HasPrefix(reason, "deny_read"):
 		return "Path matched a deny_read policy rule. Read was blocked."
 	case strings.HasPrefix(reason, "network"):
 		return "Network access denied by policy."
 	default:
-		return "Write was blocked and reverted by Airlock policy."
+		return "Write was denied by Airlock policy; see the recorded revert result."
 	}
 }
 
@@ -1449,6 +1666,27 @@ func webGovernanceSentence(m runmeta.RunManifest, evs []events.Event, hasRollbac
 	}
 
 	category := classifyDisplayCategory(adapter, m.Invocation.DisplayCommand, len(m.TouchedPaths) > 0, cmdBlocked)
+	allowedChanges := 0
+	deniedChanges := 0
+	revertFailures := 0
+	for _, e := range evs {
+		if strings.HasPrefix(e.Type, "FILE_") {
+			allowedChanges++
+		}
+		if e.Type == "POLICY_DENY" || e.Type == "APPROVAL_REQUIRED" {
+			deniedChanges++
+			failed := false
+			if reverted, ok := e.Meta["reverted"].(bool); ok && !reverted {
+				failed = true
+			}
+			if revertErr, ok := e.Meta["revert_error"].(string); ok && revertErr != "" {
+				failed = true
+			}
+			if failed {
+				revertFailures++
+			}
+		}
+	}
 
 	var parts []string
 	switch category {
@@ -1458,6 +1696,8 @@ func webGovernanceSentence(m runmeta.RunManifest, evs []events.Event, hasRollbac
 		parts = append(parts, fmt.Sprintf("A BYOM agent ran via the %s adapter in a %s sandbox.", adapter, sandbox))
 	case "Workspace Mutation":
 		parts = append(parts, fmt.Sprintf("A process ran via the %s adapter in a %s sandbox and modified workspace files.", adapter, sandbox))
+	case "Sentinel Session":
+		parts = append(parts, "Persistent Sentinel monitoring observed filesystem activity in the real repository.")
 	default:
 		parts = append(parts, fmt.Sprintf("A process ran via the %s adapter in a %s sandbox.", adapter, sandbox))
 	}
@@ -1466,15 +1706,15 @@ func webGovernanceSentence(m runmeta.RunManifest, evs []events.Event, hasRollbac
 		// first sentence already covers the block; no additional detail needed
 	} else {
 		var details []string
-		if len(m.TouchedPaths) > 0 {
-			details = append(details, fmt.Sprintf("%d safe write(s) allowed", len(m.TouchedPaths)))
+		if allowedChanges > 0 {
+			details = append(details, fmt.Sprintf("%d write(s) allowed", allowedChanges))
 		}
-		if len(m.DeniedPaths) > 0 || m.ApprovalSummary.DeniedCount > 0 {
-			n := len(m.DeniedPaths)
-			if m.ApprovalSummary.DeniedCount > n {
-				n = m.ApprovalSummary.DeniedCount
+		if deniedChanges > 0 {
+			if revertFailures > 0 {
+				details = append(details, fmt.Sprintf("%d write(s) denied (%d revert failure(s))", deniedChanges, revertFailures))
+			} else {
+				details = append(details, fmt.Sprintf("%d write(s) denied and reverted", deniedChanges))
 			}
-			details = append(details, fmt.Sprintf("%d write(s) denied and reverted", n))
 		}
 		if len(details) > 0 {
 			parts = append(parts, strings.Join(details, ", ")+".")
@@ -1941,29 +2181,30 @@ func deriveRunCard(a runmeta.Artifacts) runCard {
 	}
 
 	return runCard{
-		RunID:        a.RunID,
-		Title:        title,
-		Subtitle:     subtitle,
-		Command:      displayCmd,
-		Outcome:      outcome,
-		OutcomeClass: outcomeClass,
-		Adapter:      adapter,
-		When:         when,
-		RiskSummary:  riskSummary,
-		FilesChanged: changed,
-		Blocked:      blocked,
-		ReviewState:  string(r.State),
-		VerifyState:  verifyState,
-		Signed:       a.Manifest.Digest.Signed,
-		HasRollback:  runmeta.Exists(filepath.Join(a.RunDir, "rollback.json")),
-		Target:       target,
-		Mode:         a.Manifest.ExecutionMode,
-		Sandbox:      a.Manifest.Sandbox.Mode,
-		PolicyPack:   a.Manifest.PolicyPack.Name,
-		ReplayURL:    "/runs/" + a.RunID + "#timeline",
-		RunURL:       "/runs/" + a.RunID,
-		ExportCmd:    "./airlock export " + a.RunID + " --format zip",
-		RollbackCmd:  "./airlock rollback " + a.RunID + " --checkpoint cp-0",
+		RunID:         a.RunID,
+		Title:         title,
+		Subtitle:      subtitle,
+		Command:       displayCmd,
+		Outcome:       outcome,
+		OutcomeClass:  outcomeClass,
+		Adapter:       adapter,
+		When:          when,
+		RiskSummary:   riskSummary,
+		FilesChanged:  changed,
+		Blocked:       blocked,
+		ReviewState:   string(r.State),
+		VerifyState:   verifyState,
+		Signed:        a.Manifest.Digest.Signed,
+		HasRollback:   runmeta.Exists(filepath.Join(a.RunDir, "rollback.json")),
+		Target:        target,
+		Mode:          a.Manifest.ExecutionMode,
+		Sandbox:       a.Manifest.Sandbox.Mode,
+		PolicyPack:    a.Manifest.PolicyPack.Name,
+		DenyRuleCount: len(a.Manifest.PolicySummary.DenyWrite),
+		ReplayURL:     "/runs/" + a.RunID + "#timeline",
+		RunURL:        "/runs/" + a.RunID,
+		ExportCmd:     "./airlock export " + a.RunID + " --format zip",
+		RollbackCmd:   "./airlock rollback " + a.RunID + " --checkpoint cp-0",
 	}
 }
 
@@ -1982,6 +2223,9 @@ func extractCommandTask(evs []events.Event) (string, string) {
 // classifyDisplayCategory derives the operator-facing action label for a run.
 // Based solely on observable facts from manifest and events — no invented semantics.
 func classifyDisplayCategory(adapter, command string, hasChanges, isBlocked bool) string {
+	if adapter == "sentinel" {
+		return "Sentinel Session"
+	}
 	if isBlocked {
 		return "Blocked Shell Operation"
 	}
@@ -2010,13 +2254,19 @@ func deriveOutcome(m runmeta.RunManifest) (string, string) {
 
 func changedAndBlockedCounts(evs []events.Event, m runmeta.RunManifest) (int, int) {
 	changedSet := map[string]struct{}{}
-	blocked := len(m.DeniedPaths) + m.ApprovalSummary.DeniedCount
+	blocked := 0
 	for _, e := range evs {
 		if strings.HasPrefix(e.Type, "FILE_") && e.Path != "" {
 			changedSet[e.Path] = struct{}{}
 		}
 		if e.Type == "POLICY_DENY" {
 			blocked++
+		}
+	}
+	if blocked == 0 {
+		blocked = len(m.DeniedPaths)
+		if m.ApprovalSummary.DeniedCount > blocked {
+			blocked = m.ApprovalSummary.DeniedCount
 		}
 	}
 	return len(changedSet), blocked

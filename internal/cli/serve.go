@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -43,8 +45,10 @@ Lifecycle:
   airlock serve --status             show the running viewer (mode/URL/PID/log)
   airlock serve --stop               stop the running viewer
 
-Rollback from the UI (operator mode only) restores the Airlock workspace
-(.airlock/workspaces/<run_id>/repo), never your original repo.`,
+Rollback from the UI (operator mode only) follows the run's execution mode:
+workspace/container runs restore their isolated workspace; sandbox=off and
+stopped Sentinel sessions restore only recorded touched paths in the real repo.
+Rollback is disabled while a Sentinel session is active.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Lifecycle sub-actions.
 			if status {
@@ -86,7 +90,23 @@ Rollback from the UI (operator mode only) restores the Airlock workspace
 			refreshIndex()
 			ln, err := net.Listen("tcp", listen)
 			if err != nil {
-				return fmt.Errorf("unable to bind %s (try --port 8081): %w", listen, err)
+				if isPortInUse(err) {
+					if host, portStr, splitErr := net.SplitHostPort(listen); splitErr == nil {
+						if port, atoiErr := strconv.Atoi(portStr); atoiErr == nil {
+							alts := findAlternativePorts(host, port, 3)
+							if len(alts) > 0 {
+								var sb strings.Builder
+								fmt.Fprintf(&sb, "Port %d is already in use.\n\nAvailable alternatives:\n", port)
+								for _, p := range alts {
+									fmt.Fprintf(&sb, "  airlock serve --port %d\n", p)
+								}
+								cmd.SilenceUsage = true
+								return errors.New(strings.TrimRight(sb.String(), "\n"))
+							}
+						}
+					}
+				}
+				return fmt.Errorf("unable to bind %s: %w", listen, err)
 			}
 			url := "http://" + ln.Addr().String()
 
@@ -120,7 +140,23 @@ Rollback from the UI (operator mode only) restores the Airlock workspace
 				removeViewerMeta()
 				os.Exit(0)
 			}
-			return web.StartOnListener(ln, open, readOnly, shutdownFn)
+			repoAbs, absErr := filepath.Abs(".")
+			if absErr != nil {
+				return fmt.Errorf("resolve viewer repository: %w", absErr)
+			}
+			return web.StartOnListenerWithOptions(ln, open, web.ServerOptions{
+				ReadOnly:     readOnly,
+				ShutdownFunc: shutdownFn,
+				RepoPath:     repoAbs,
+				SentinelStatus: func() (web.SentinelProcess, bool, error) {
+					m, running, statusErr := runningSentinelDetailed(repoAbs)
+					return web.SentinelProcess{
+						PID: m.PID, Repo: m.Repo, SessionID: m.Session,
+						StartedAt: m.Started, LogPath: m.Log, Background: m.Background,
+					}, running, statusErr
+				},
+				SentinelStop: func() error { return sentinelStopCmd(repoAbs) },
+			})
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "Listen address")
@@ -135,6 +171,29 @@ Rollback from the UI (operator mode only) restores the Airlock workspace
 	cmd.Flags().BoolVar(&managed, "managed", false, "Internal: run as the managed background viewer")
 	_ = cmd.Flags().MarkHidden("managed")
 	return cmd
+}
+
+// isPortInUse reports whether err is an "address already in use" bind failure.
+// Checks both the Unix and Windows error strings.
+func isPortInUse(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "address already in use") ||
+		strings.Contains(s, "Only one usage of each socket address")
+}
+
+// findAlternativePorts probes up to maxCount ports above startPort on the given
+// host and returns those that can immediately be bound. Scans at most 20
+// candidates so the error path stays fast.
+func findAlternativePorts(host string, startPort, maxCount int) []int {
+	var found []int
+	for p := startPort + 1; p <= startPort+20 && len(found) < maxCount; p++ {
+		ln, listenErr := net.Listen("tcp", host+":"+strconv.Itoa(p))
+		if listenErr == nil {
+			_ = ln.Close()
+			found = append(found, p)
+		}
+	}
+	return found
 }
 
 // installViewerCleanup removes the viewer metadata when the serving process is
