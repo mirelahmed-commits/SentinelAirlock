@@ -81,6 +81,17 @@ func CopyRepo(src, dst string, ignore []string) error {
 func shouldIgnore(rel string, isDir bool, ignore []string) bool {
 	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
 	_ = isDir
+	// .airlock is always excluded, regardless of caller-supplied ignore rules.
+	// Every CopyRepo destination this codebase uses (staged workspace,
+	// checkpoints) lives under <repo>/.airlock/, nested inside the very tree
+	// being copied. If a caller's ignore list omits it — e.g. a hand-written
+	// airlock.yaml with no `workspace.ignore` section at all — the walk would
+	// otherwise recurse into the copy it is itself still writing, forever
+	// (until it fails with "file name too long"). This mirrors the recorder's
+	// own hardcoded .airlock exclusion (internal/recorder/recorder.go).
+	if rel == ".airlock" || strings.HasPrefix(rel, ".airlock/") {
+		return true
+	}
 	for _, g := range ignore {
 		g = filepath.ToSlash(strings.TrimSpace(g))
 		if g == "" {

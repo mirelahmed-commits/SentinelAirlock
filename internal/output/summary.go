@@ -187,15 +187,26 @@ func commandTaskMode(evs []events.Event) (string, string, string) {
 }
 
 func latestStatus(evs []events.Event) string {
+	sentinelStarted := false
 	for i := len(evs) - 1; i >= 0; i-- {
 		e := evs[i]
-		if e.Type != "RUN_END" {
+		switch e.Type {
+		case "SENTINEL_START":
+			sentinelStarted = true
+			continue
+		case "SENTINEL_STOP":
+			return "sentinel stopped"
+		case "RUN_END":
+		default:
 			continue
 		}
 		if errStr, ok := e.Meta["error"].(string); ok && errStr != "" {
 			return "failed: " + errStr
 		}
 		return "success"
+	}
+	if sentinelStarted {
+		return "sentinel active"
 	}
 	return "unknown"
 }
