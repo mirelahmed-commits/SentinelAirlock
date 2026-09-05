@@ -117,7 +117,7 @@ func runningSentinelDetailed(repoAbs string) (sentinelMeta, bool, error) {
 
 // startSentinelBackground launches a detached child running the foreground
 // Sentinel loop against repoAbs, then returns control to the terminal.
-func startSentinelBackground(repoAbs, policyPath, policyPack string) error {
+func startSentinelBackground(repoAbs, policyPath, policyPack, fleetURL, fleetToken string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot locate airlock binary: %w", err)
@@ -137,6 +137,12 @@ func startSentinelBackground(repoAbs, policyPath, policyPack string) error {
 	}
 	if policyPack != "" {
 		args = append(args, "--policy-pack", policyPack)
+	}
+	if fleetURL != "" {
+		args = append(args, "--fleet", fleetURL)
+	}
+	if fleetToken != "" {
+		args = append(args, "--fleet-token", fleetToken)
 	}
 
 	cmd := exec.Command(self, args...)
