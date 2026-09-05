@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -17,7 +18,7 @@ import (
 
 type Recorder struct {
 	root         string
-	cfg          *policy.Config
+	cfg          atomic.Pointer[policy.Config] // see SetPolicy: hot-swappable for live Fleet policy reconciliation
 	log          *events.Logger
 	approvalMode governance.ApprovalMode
 	debounce     time.Duration // 0 = evaluate immediately (airlock run); >0 = coalesce rapid per-path events (Sentinel)
@@ -56,9 +57,8 @@ func newRecorder(root string, log *events.Logger, cfg *policy.Config, approvalMo
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{
+	r := &Recorder{
 		root:          root,
-		cfg:           cfg,
 		log:           log,
 		approvalMode:  approvalMode,
 		debounce:      debounce,
@@ -67,7 +67,21 @@ func newRecorder(root string, log *events.Logger, cfg *policy.Config, approvalMo
 		lastBytes:     map[string][]byte{},
 		suppressUntil: map[string]time.Time{},
 		pending:       map[string]*time.Timer{},
-	}, nil
+	}
+	r.cfg.Store(cfg)
+	return r, nil
+}
+
+// SetPolicy atomically swaps the policy config the recorder enforces on every
+// subsequent evaluation. Safe to call concurrently with the watch loop (and
+// with debounced evaluations running on their own timer goroutines): reads
+// use the same atomic.Pointer, so an in-flight evaluate() sees either the
+// old or the new config in full, never a partially-updated one. This is what
+// makes Fleet policy reconciliation (internal/cli/sentinel.go) take effect
+// on real enforcement immediately, rather than only updating what Sentinel
+// reports about itself.
+func (r *Recorder) SetPolicy(cfg *policy.Config) {
+	r.cfg.Store(cfg)
 }
 
 // Seed populates the before-state cache from the current on-disk content of
@@ -229,7 +243,7 @@ func (r *Recorder) evaluate(rel string, op fsnotify.Op) {
 	before := r.getLast(rel)
 	after, _ := os.ReadFile(full) // if removed, read fails -> empty
 
-	assessment := governance.ClassifyFilesystem(rel, opName(op), r.cfg)
+	assessment := governance.ClassifyFilesystem(rel, opName(op), r.cfg.Load())
 	approvalDecision := governance.Decide(r.approvalMode, assessment)
 	if approvalDecision != governance.DecisionAllow {
 		// compute attempted diff for logging
@@ -328,8 +342,8 @@ func (r *Recorder) shouldIgnore(rel string, isDir bool) bool {
 		return true
 	}
 	// config ignores (simple handling)
-	if r.cfg != nil {
-		for _, g := range r.cfg.Workspace.Ignore {
+	if cfg := r.cfg.Load(); cfg != nil {
+		for _, g := range cfg.Workspace.Ignore {
 			g = filepath.ToSlash(strings.TrimSpace(g))
 			if g == "" {
 				continue

@@ -49,15 +49,32 @@ func OpenStore(path string) (*Store, error) {
 }
 
 // UpsertEnroll records or refreshes a Sentinel's full identity at (re)start.
-// rec should be fully populated by the caller (the HTTP handler); EnrolledAt
-// is preserved from the first time this SentinelID was ever seen, overriding
-// whatever rec.EnrolledAt was set to, so restarting a Sentinel does not reset
-// "how long has this installation existed."
+// rec should be fully populated by the caller (the HTTP handler) with
+// identity/actual-state fields; EnrolledAt is preserved from the first time
+// this SentinelID was ever seen, overriding whatever rec.EnrolledAt was set
+// to, so restarting a Sentinel does not reset "how long has this
+// installation existed."
+//
+// Desired*/Reconcile* fields (Prompt 14A) are likewise carried over from any
+// existing record rather than being wiped by an enroll: an operator may
+// assign a desired policy to a Sentinel before it has ever enrolled, or
+// while it is offline, and re-enrolling (which happens on every Sentinel
+// restart) must not discard that assignment -- the enroll request has no
+// opinion on desired state at all, so it must never be able to clear it.
 func (s *Store) UpsertEnroll(rec Record) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.records[rec.SentinelID]; ok && !existing.EnrolledAt.IsZero() {
-		rec.EnrolledAt = existing.EnrolledAt
+	if existing, ok := s.records[rec.SentinelID]; ok {
+		if !existing.EnrolledAt.IsZero() {
+			rec.EnrolledAt = existing.EnrolledAt
+		}
+		rec.DesiredPolicyID = existing.DesiredPolicyID
+		rec.DesiredPolicyVersion = existing.DesiredPolicyVersion
+		rec.DesiredPolicyHash = existing.DesiredPolicyHash
+		rec.ReconcileStatus = existing.ReconcileStatus
+		rec.ReconcileError = existing.ReconcileError
+		rec.ReconcileForHash = existing.ReconcileForHash
+		rec.LastReconcileAt = existing.LastReconcileAt
 	}
 	s.records[rec.SentinelID] = rec
 	if err := s.saveLocked(); err != nil {
@@ -81,6 +98,30 @@ func (s *Store) UpsertHeartbeat(id string, apply func(*Record)) (Record, error) 
 	}
 	apply(&rec)
 	s.records[id] = rec
+	if err := s.saveLocked(); err != nil {
+		return Record{}, err
+	}
+	return rec, nil
+}
+
+// AssignPolicy sets the desired policy ref for sentinelID (Prompt 14A). Like
+// UpsertHeartbeat, it tolerates an unknown sentinelID -- an operator may
+// reasonably want to pre-assign a policy to a Sentinel that has not enrolled
+// yet -- creating a minimal record that a future enrollment/heartbeat fills
+// in the rest of. Assigning does not touch ReconcileStatus/Error: a fresh
+// assignment naturally reads as DRIFTED (via ReconcileState) until the
+// Sentinel next reconciles, which is the correct, honest transition.
+func (s *Store) AssignPolicy(sentinelID string, ref PolicyRef) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.records[sentinelID]
+	if rec.SentinelID == "" {
+		rec.SentinelID = sentinelID
+	}
+	rec.DesiredPolicyID = ref.PolicyID
+	rec.DesiredPolicyVersion = ref.Version
+	rec.DesiredPolicyHash = ref.Hash
+	s.records[sentinelID] = rec
 	if err := s.saveLocked(); err != nil {
 		return Record{}, err
 	}

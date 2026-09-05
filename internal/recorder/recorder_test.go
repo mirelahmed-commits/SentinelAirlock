@@ -405,3 +405,62 @@ func TestRecorder_RevertError_CapturedInMeta(t *testing.T) {
 		t.Skip("could not reliably force a revert failure in this environment (e.g. running as root)")
 	}
 }
+
+// --- SetPolicy: live policy hot-swap (Prompt 14A Fleet reconciliation) -----
+
+func TestRecorder_SetPolicy_TakesEffectOnNextEvaluation(t *testing.T) {
+	root := t.TempDir()
+	evDir := t.TempDir()
+
+	log := newTestLogger(t, evDir)
+	allowAll := &policy.Config{} // no deny_write rules: everything allowed
+	rec, err := New(root, log, allowAll, governance.ApprovalAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Seed(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Stop()
+
+	target := filepath.Join(root, "config.txt")
+	if err := os.WriteFile(target, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the recorder to have actually finished evaluating (and thus
+	// cached as baseline) the first write before swapping policy -- not just
+	// for the disk content to match, which would race SetPolicy against the
+	// recorder's own goroutine still processing the first fsnotify event.
+	if !pollUntil(t, 2*time.Second, func() bool {
+		for _, e := range log.EventsSnapshot() {
+			if e.Path == "config.txt" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("expected the first write to be recorded before swapping policy")
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "v1\n" {
+		t.Fatalf("write under the initial allow-all policy should have survived, got %q err=%v", b, err)
+	}
+
+	// Swap to a policy that denies config.txt -- must take effect on the very
+	// next evaluation without restarting the recorder.
+	deny := &policy.Config{}
+	deny.Policy.DenyWrite = []string{"config.txt"}
+	rec.SetPolicy(deny)
+
+	if err := os.WriteFile(target, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !pollUntil(t, 2*time.Second, func() bool {
+		b, _ := os.ReadFile(target)
+		return string(b) == "v1\n" // reverted back to the pre-swap baseline
+	}) {
+		t.Fatal("write after SetPolicy should have been denied and reverted under the new policy")
+	}
+}
