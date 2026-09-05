@@ -10,13 +10,17 @@ import (
 	"time"
 )
 
-func newTestServer(t *testing.T, token string) (*Server, *Store) {
+func newTestServer(t *testing.T, token string) (*Server, *Store, *PolicyStore) {
 	t.Helper()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "fleet.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(store, token), store
+	policyStore, err := OpenPolicyStore(filepath.Join(t.TempDir(), "fleet-policies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(store, policyStore, token), store, policyStore
 }
 
 func doJSON(t *testing.T, srv *Server, method, path string, body any, token string) *httptest.ResponseRecorder {
@@ -41,7 +45,7 @@ func doJSON(t *testing.T, srv *Server, method, path string, body any, token stri
 }
 
 func TestServer_Enroll_ThenAppearsInInventory(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	rr := doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{
 		SentinelID: "sen-1", MachineID: "mach-1", RepoPath: "/repo/a", Hostname: "host-a",
 		Platform: "darwin/arm64", SentinelVersion: "dev", SessionID: "sess-1", StartedAt: time.Now().UTC(),
@@ -64,7 +68,7 @@ func TestServer_Enroll_ThenAppearsInInventory(t *testing.T) {
 }
 
 func TestServer_Heartbeat_UpdatesLastSeenAndStatus(t *testing.T) {
-	srv, store := newTestServer(t, "")
+	srv, store, _ := newTestServer(t, "")
 	doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1"}, "")
 
 	rr := doJSON(t, srv, http.MethodPost, "/api/fleet/heartbeat", HeartbeatRequest{
@@ -84,7 +88,7 @@ func TestServer_Heartbeat_UpdatesLastSeenAndStatus(t *testing.T) {
 }
 
 func TestServer_RecentHeartbeat_ReportsActive(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1"}, "")
 	doJSON(t, srv, http.MethodPost, "/api/fleet/heartbeat", HeartbeatRequest{SentinelID: "sen-1", Timestamp: time.Now().UTC()}, "")
 
@@ -99,7 +103,7 @@ func TestServer_RecentHeartbeat_ReportsActive(t *testing.T) {
 }
 
 func TestServer_StaleHeartbeat_ReportsOffline(t *testing.T) {
-	srv, store := newTestServer(t, "")
+	srv, store, _ := newTestServer(t, "")
 	stale := time.Now().UTC().Add(-OfflineThreshold - time.Minute)
 	if _, err := store.UpsertEnroll(Record{SentinelID: "sen-1", MachineID: "mach-1", EnrolledAt: stale, LastHeartbeat: stale}); err != nil {
 		t.Fatal(err)
@@ -125,7 +129,7 @@ func TestServer_StaleHeartbeat_ReportsOffline(t *testing.T) {
 }
 
 func TestServer_MultipleSentinelsEnroll(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	for _, id := range []string{"sen-a", "sen-b"} {
 		rr := doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: id, MachineID: "mach-1", RepoPath: "/repo/" + id}, "")
 		if rr.Code != http.StatusOK {
@@ -143,7 +147,7 @@ func TestServer_MultipleSentinelsEnroll(t *testing.T) {
 }
 
 func TestServer_RepeatedEnroll_DoesNotDuplicate(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	for i := 0; i < 3; i++ {
 		doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1"}, "")
 	}
@@ -158,7 +162,7 @@ func TestServer_RepeatedEnroll_DoesNotDuplicate(t *testing.T) {
 }
 
 func TestServer_EnrollMissingFields_Rejected(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	rr := doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1"}, "")
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for missing machine_id, got %d", rr.Code)
@@ -166,7 +170,7 @@ func TestServer_EnrollMissingFields_Rejected(t *testing.T) {
 }
 
 func TestServer_TokenRequired_RejectsUnauthenticated(t *testing.T) {
-	srv, _ := newTestServer(t, "secret-token")
+	srv, _, _ := newTestServer(t, "secret-token")
 	rr := doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1"}, "")
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without token, got %d", rr.Code)
@@ -182,7 +186,7 @@ func TestServer_TokenRequired_RejectsUnauthenticated(t *testing.T) {
 }
 
 func TestServer_NoTokenConfigured_AllowsAnyRequest(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	rr := doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1"}, "irrelevant")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 when no token is configured, got %d", rr.Code)
@@ -190,7 +194,7 @@ func TestServer_NoTokenConfigured_AllowsAnyRequest(t *testing.T) {
 }
 
 func TestServer_DetailAPI_UnknownSentinel_404(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	rr := doJSON(t, srv, http.MethodGet, "/api/fleet/sentinels/does-not-exist", nil, "")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
@@ -198,7 +202,7 @@ func TestServer_DetailAPI_UnknownSentinel_404(t *testing.T) {
 }
 
 func TestServer_IndexAndDetailPages_Render(t *testing.T) {
-	srv, _ := newTestServer(t, "")
+	srv, _, _ := newTestServer(t, "")
 	doJSON(t, srv, http.MethodPost, "/api/fleet/enroll", EnrollRequest{SentinelID: "sen-1", MachineID: "mach-1", RepoPath: "/repo/a"}, "")
 
 	rr := httptest.NewRecorder()

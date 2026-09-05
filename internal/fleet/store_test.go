@@ -47,6 +47,27 @@ func TestStore_UpsertEnroll_PreservesOriginalEnrolledAt(t *testing.T) {
 	}
 }
 
+func TestStore_UpsertEnroll_PreservesDesiredPolicyAssignment(t *testing.T) {
+	// A desired policy may be assigned before a Sentinel has ever enrolled,
+	// or while it's offline/restarting. Re-enrolling (which happens on
+	// every Sentinel restart) must never silently clear that assignment --
+	// the enroll request has no opinion on desired state at all.
+	s, err := OpenStore(filepath.Join(t.TempDir(), "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AssignPolicy("sen-1", PolicyRef{PolicyID: "production", Version: 3, Hash: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.UpsertEnroll(Record{SentinelID: "sen-1", MachineID: "mach-1", LastHeartbeat: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.DesiredPolicyID != "production" || rec.DesiredPolicyVersion != 3 || rec.DesiredPolicyHash != "abc" {
+		t.Fatalf("enroll must not clear a pre-existing desired policy assignment, got %+v", rec)
+	}
+}
+
 func TestStore_UpsertHeartbeat_UpdatesExistingRecord(t *testing.T) {
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fleet.json"))
 	if err != nil {

@@ -92,11 +92,30 @@ type HeartbeatRequest struct {
 	DenyCount         int        `json:"deny_count"`
 	RevertedCount     int        `json:"reverted_count"`
 	RevertFailedCount int        `json:"revert_failed_count"`
+
+	// Reconcile self-report (Prompt 14A). ReconcileStatus is "" (nothing to
+	// report -- IN_SYNC/DRIFTED are derived server-side from desired vs
+	// actual instead), "RECONCILING" (actively fetching/applying right now),
+	// or "RECONCILE_FAILED" (the attempt for ReconcileForHash failed;
+	// ReconcileError explains why, and the Sentinel kept its previous
+	// last-known-good policy -- see internal/cli/sentinel.go's
+	// reconcileFleetPolicy).
+	ReconcileStatus  string `json:"reconcile_status,omitempty"`
+	ReconcileError   string `json:"reconcile_error,omitempty"`
+	ReconcileForHash string `json:"reconcile_for_hash,omitempty"`
 }
 
-// HeartbeatResponse acknowledges a heartbeat.
+// HeartbeatResponse acknowledges a heartbeat and carries the Sentinel's
+// current desired policy, if one has been assigned (Prompt 14A). An empty
+// DesiredPolicyID means this Sentinel is not Fleet-policy-managed: it
+// should keep enforcing whatever it already has (its local airlock.yaml, or
+// a previously-applied Fleet policy) and not treat the absence of an
+// assignment as "clear my policy."
 type HeartbeatResponse struct {
-	Accepted bool `json:"accepted"`
+	Accepted             bool   `json:"accepted"`
+	DesiredPolicyID      string `json:"desired_policy_id,omitempty"`
+	DesiredPolicyVersion int    `json:"desired_policy_version,omitempty"`
+	DesiredPolicyHash    string `json:"desired_policy_hash,omitempty"`
 }
 
 // Record is the control plane's durable view of one Sentinel installation.
@@ -117,17 +136,46 @@ type HeartbeatResponse struct {
 // the current/most recent process start and is refreshed on every
 // enrollment (i.e. every Sentinel start).
 type Record struct {
-	SentinelID        string     `json:"sentinel_id"`
-	MachineID         string     `json:"machine_id"`
-	Hostname          string     `json:"hostname"`
-	Platform          string     `json:"platform"`
-	RepoPath          string     `json:"repo_path"`
-	SentinelVersion   string     `json:"sentinel_version"`
-	SessionID         string     `json:"session_id"`
-	Status            string     `json:"status"`
-	PolicyID          string     `json:"policy_id,omitempty"`
-	PolicyVersion     string     `json:"policy_version,omitempty"`
-	PolicyHash        string     `json:"policy_hash,omitempty"`
+	SentinelID      string `json:"sentinel_id"`
+	MachineID       string `json:"machine_id"`
+	Hostname        string `json:"hostname"`
+	Platform        string `json:"platform"`
+	RepoPath        string `json:"repo_path"`
+	SentinelVersion string `json:"sentinel_version"`
+	SessionID       string `json:"session_id"`
+	Status          string `json:"status"`
+
+	// PolicyID/PolicyVersion/PolicyHash are ACTUAL state: whatever the
+	// Sentinel most recently reported it is really enforcing (a local
+	// policy pack, "local" for a plain airlock.yaml, or a Fleet-managed
+	// PolicyRef's id/stringified-version/hash once one has been
+	// successfully applied). PolicyVersion is a string for backward
+	// compatibility with Prompt 14 (a policy-pack version like "1.0.0" is
+	// not an integer) -- compare against DesiredPolicyVersion via
+	// ReconcileState, not by direct type equality.
+	PolicyID      string `json:"policy_id,omitempty"`
+	PolicyVersion string `json:"policy_version,omitempty"`
+	PolicyHash    string `json:"policy_hash,omitempty"`
+
+	// DesiredPolicy{ID,Version,Hash} are DESIRED state: set only by an
+	// operator via Store.AssignPolicy (Prompt 14A), never by a Sentinel's
+	// own heartbeat. Empty DesiredPolicyID means "not Fleet-policy-managed"
+	// -- see ReconcileState.
+	DesiredPolicyID      string `json:"desired_policy_id,omitempty"`
+	DesiredPolicyVersion int    `json:"desired_policy_version,omitempty"`
+	DesiredPolicyHash    string `json:"desired_policy_hash,omitempty"`
+
+	// ReconcileStatus/ReconcileError/ReconcileForHash are the Sentinel's own
+	// self-report of an in-progress or failed reconciliation attempt (see
+	// HeartbeatRequest). IN_SYNC/DRIFTED are never stored here -- they are
+	// always derived fresh by ReconcileState from Desired* vs actual
+	// PolicyID/PolicyVersion/PolicyHash, the same "compute, don't trust"
+	// principle Health() already uses for liveness.
+	ReconcileStatus  string     `json:"reconcile_status,omitempty"`
+	ReconcileError   string     `json:"reconcile_error,omitempty"`
+	ReconcileForHash string     `json:"reconcile_for_hash,omitempty"`
+	LastReconcileAt  *time.Time `json:"last_reconcile_at,omitempty"`
+
 	EnrolledAt        time.Time  `json:"enrolled_at"`
 	StartedAt         time.Time  `json:"started_at"`
 	LastHeartbeat     time.Time  `json:"last_heartbeat"`
@@ -151,11 +199,21 @@ func Health(rec Record, now time.Time) string {
 	return "ACTIVE"
 }
 
-// SentinelView is a Record plus its computed Health, as returned by the
-// inventory APIs.
+// SentinelView is a Record plus its computed Health and policy
+// ReconcileState, as returned by the inventory APIs. PolicyState/
+// PolicyStateError are always computed fresh from Record's stored fields
+// (see ReconcileState) -- never trusted as a standing flag, the same
+// "compute, don't trust" principle Health already applies to liveness.
 type SentinelView struct {
 	Record
-	Health string `json:"health"`
+	Health           string `json:"health"`
+	PolicyState      string `json:"policy_state,omitempty"`
+	PolicyStateError string `json:"policy_state_error,omitempty"`
+}
+
+func newSentinelView(rec Record, now time.Time) SentinelView {
+	status, errMsg := ReconcileState(rec)
+	return SentinelView{Record: rec, Health: Health(rec, now), PolicyState: status, PolicyStateError: errMsg}
 }
 
 // Snapshot is the fleet inventory at a point in time: summary counts plus

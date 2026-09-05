@@ -8,12 +8,21 @@ import (
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/fleet"
 )
 
+func newTestPolicyStore(t *testing.T) *fleet.PolicyStore {
+	t.Helper()
+	ps, err := fleet.OpenPolicyStore(filepath.Join(t.TempDir(), "fleet-policies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ps
+}
+
 func TestFetchFleetSnapshot_EmptyFleet(t *testing.T) {
 	store, err := fleet.OpenStore(filepath.Join(t.TempDir(), "fleet.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(fleet.NewServer(store, "").Handler())
+	srv := httptest.NewServer(fleet.NewServer(store, newTestPolicyStore(t), "").Handler())
 	defer srv.Close()
 
 	snap, err := fetchFleetSnapshot(srv.URL, "")
@@ -36,7 +45,7 @@ func TestFetchFleetSnapshot_PopulatedFleet(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(fleet.NewServer(store, "").Handler())
+	srv := httptest.NewServer(fleet.NewServer(store, newTestPolicyStore(t), "").Handler())
 	defer srv.Close()
 
 	snap, err := fetchFleetSnapshot(srv.URL, "")
@@ -56,7 +65,7 @@ func TestFetchFleetSnapshot_WrongTokenRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(fleet.NewServer(store, "secret").Handler())
+	srv := httptest.NewServer(fleet.NewServer(store, newTestPolicyStore(t), "secret").Handler())
 	defer srv.Close()
 
 	if _, err := fetchFleetSnapshot(srv.URL, ""); err == nil {

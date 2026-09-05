@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -39,12 +40,27 @@ func (c *Client) Enroll(req EnrollRequest) error {
 	return c.post("/api/fleet/enroll", req, &resp)
 }
 
-// Heartbeat reports current liveness/status/counters. It is safe to call
-// even if Enroll has never succeeded -- the control plane creates a minimal
-// record from whatever a heartbeat carries rather than rejecting it.
-func (c *Client) Heartbeat(req HeartbeatRequest) error {
+// Heartbeat reports current liveness/status/counters and returns the
+// control plane's response, which carries the Sentinel's current desired
+// policy (if one has been assigned) -- see internal/cli/sentinel.go's
+// fleetLoop for how that drives reconciliation. It is safe to call even if
+// Enroll has never succeeded -- the control plane creates a minimal record
+// from whatever a heartbeat carries rather than rejecting it.
+func (c *Client) Heartbeat(req HeartbeatRequest) (HeartbeatResponse, error) {
 	var resp HeartbeatResponse
-	return c.post("/api/fleet/heartbeat", req, &resp)
+	err := c.post("/api/fleet/heartbeat", req, &resp)
+	return resp, err
+}
+
+// GetPolicyVersion fetches one specific, immutable version of a named
+// Fleet-managed policy, including its full YAML content -- what a Sentinel
+// calls when it discovers (via a heartbeat response) that its desired
+// policy differs from what it is currently enforcing.
+func (c *Client) GetPolicyVersion(policyID string, version int) (PolicyVersion, error) {
+	var v PolicyVersion
+	path := "/api/fleet/policies/" + policyID + "/versions/" + strconv.Itoa(version)
+	err := c.get(path, &v)
+	return v, err
 }
 
 func (c *Client) post(path string, body, out any) error {
@@ -57,6 +73,18 @@ func (c *Client) post(path string, body, out any) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	return c.do(httpReq, path, out)
+}
+
+func (c *Client) get(path string, out any) error {
+	httpReq, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	return c.do(httpReq, path, out)
+}
+
+func (c *Client) do(httpReq *http.Request, path string, out any) error {
 	if c.token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.token)
 	}

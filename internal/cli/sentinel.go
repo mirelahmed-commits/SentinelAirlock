@@ -9,7 +9,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -228,6 +230,26 @@ func startSentinelSession(repoAbs, policyPath, policyPack string, managed bool, 
 		}
 	}
 
+	// Local-vs-Fleet precedence (Prompt 14A, documented in progress.md): once
+	// this Sentinel identity has ever successfully reconciled a Fleet-
+	// managed policy, that last-known-good policy is authoritative on every
+	// subsequent start -- it supersedes local airlock.yaml and any
+	// --policy-pack, even if the control plane is unreachable right now.
+	// This is what lets a restarted, Fleet-managed Sentinel keep enforcing
+	// v12 (not silently fall back to a stale/looser local file) until it
+	// reconnects and confirms v12 is still current. A brand-new Fleet-
+	// managed Sentinel that has never yet reconciled anything falls back to
+	// local airlock.yaml, exactly like a standalone Sentinel, until its
+	// first successful reconciliation establishes an LKG.
+	var fleetPolicyRef fleet.PolicyRef
+	if strings.TrimSpace(fleetURL) != "" {
+		if lkgCfg, ref, ok := loadFleetLKG(repoAbs); ok {
+			cfg = lkgCfg
+			fleetPolicyRef = ref
+			fmt.Printf("Restored last-known-good Fleet policy: %s v%d (hash %s)\n", ref.PolicyID, ref.Version, ref.Hash)
+		}
+	}
+
 	sessionID := strings.TrimSpace(os.Getenv("AIRLOCK_RUN_ID_FORCE"))
 	if sessionID == "" {
 		sessionID = uuid.New().String()
@@ -265,6 +287,7 @@ func startSentinelSession(repoAbs, policyPath, policyPack string, managed bool, 
 		policyPath:     resolvedPolicyPath,
 		policyPack:     policyPack,
 		cfg:            cfg,
+		fleetPolicyRef: fleetPolicyRef,
 		logger:         logger,
 		startedAt:      startedAt,
 	}
@@ -321,10 +344,22 @@ type sentinelSession struct {
 	checkpointPath string
 	policyPath     string
 	policyPack     string
-	cfg            *policy.Config
 	logger         *events.Logger
 	rec            *recorder.Recorder
 	startedAt      time.Time
+
+	// cfg and fleetPolicyRef are read from the fleet goroutine
+	// (policyIdentity, buildHeartbeatRequest) and written from it too (a
+	// successful Fleet reconciliation), while writeManifest/refreshEvidence
+	// read cfg from the session's own ticker goroutine -- so both go through
+	// policyMu rather than being plain fields. fleetPolicyRef's zero value
+	// (PolicyID=="") means "not yet running a Fleet-managed policy": cfg is
+	// still whatever local airlock.yaml (+ policy pack) resolved to, or a
+	// restored last-known-good Fleet policy loaded at startup -- see
+	// loadFleetLKG.
+	policyMu       sync.RWMutex
+	cfg            *policy.Config
+	fleetPolicyRef fleet.PolicyRef
 
 	// Fleet reporting (optional; nil/zero when --fleet is unset). See
 	// startFleet and fleetLoop below. sentinelID is the durable identity for
@@ -337,12 +372,36 @@ type sentinelSession struct {
 	fleetDone      chan struct{}
 }
 
+func (s *sentinelSession) getCfg() *policy.Config {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.cfg
+}
+
+func (s *sentinelSession) setCfg(cfg *policy.Config) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	s.cfg = cfg
+}
+
+func (s *sentinelSession) getFleetPolicyRef() fleet.PolicyRef {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.fleetPolicyRef
+}
+
+func (s *sentinelSession) setFleetPolicyRef(ref fleet.PolicyRef) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	s.fleetPolicyRef = ref
+}
+
 func (s *sentinelSession) writeManifest(status string) error {
 	evs := s.logger.EventsSnapshot()
 	manifest := runmeta.RunManifest{
 		RunID:           s.sessionID,
 		WorkspacePath:   s.repoAbs,
-		PolicySummary:   runmeta.BuildPolicySummary(s.policyPath, s.cfg),
+		PolicySummary:   runmeta.BuildPolicySummary(s.policyPath, s.getCfg()),
 		ExecutionMode:   "sentinel",
 		TouchedPaths:    touchedPathsFromEvents(evs),
 		DeniedPaths:     deniedPathsFromEvents(evs),
@@ -480,9 +539,12 @@ func (s *sentinelSession) fleetLoop() {
 				}
 				enrolled = true
 			}
-			if err := s.fleetClient.Heartbeat(s.buildHeartbeatRequest()); err != nil {
+			resp, err := s.fleetClient.Heartbeat(s.buildHeartbeatRequest())
+			if err != nil {
 				fmt.Printf("WARN: fleet heartbeat failed: %v (continuing local governance; retrying next interval)\n", err)
+				continue
 			}
+			s.reconcileFleetPolicy(resp)
 		}
 	}
 }
@@ -556,6 +618,14 @@ func (s *sentinelSession) buildHeartbeatRequest() fleet.HeartbeatRequest {
 // fleet operator to notice two Sentinels have diverging effective policy,
 // without Prompt 14 needing to implement any policy distribution.
 func (s *sentinelSession) policyIdentity() (id, version, hash string) {
+	// Once a Fleet-managed policy has been successfully applied, THAT is the
+	// actual state being enforced and reported -- not the local pack/file
+	// this session started with (which, for a Fleet-managed Sentinel, is
+	// only ever a pre-first-reconciliation fallback; see startSentinelSession
+	// and loadFleetLKG).
+	if ref := s.getFleetPolicyRef(); !ref.Empty() {
+		return ref.PolicyID, strconv.Itoa(ref.Version), ref.Hash
+	}
 	id = "local"
 	if s.policyPack != "" {
 		id = s.policyPack
@@ -563,7 +633,7 @@ func (s *sentinelSession) policyIdentity() (id, version, hash string) {
 			version = pack.Version
 		}
 	}
-	b, _ := json.Marshal(runmeta.BuildPolicySummary(s.policyPath, s.cfg))
+	b, _ := json.Marshal(runmeta.BuildPolicySummary(s.policyPath, s.getCfg()))
 	sum := sha256.Sum256(b)
 	hash = hex.EncodeToString(sum[:])[:16]
 	return id, version, hash
@@ -604,4 +674,170 @@ func governanceCounters(evs []events.Event) (allow, deny, reverted, revertFailed
 		lastEventAt = &ts
 	}
 	return allow, deny, reverted, revertFailed, lastEventAt
+}
+
+// --- Fleet policy reconciliation (Prompt 14A) -------------------------------
+//
+// A heartbeat response carries the control plane's desired policy, if one
+// is assigned (fleet.HeartbeatResponse). reconcileFleetPolicy is what turns
+// "desired differs from actual" into a real, local policy swap -- entirely
+// on the fleet goroutine, never blocking or being blocked by the recorder.
+// The only interaction with live enforcement is the single, atomic
+// Recorder.SetPolicy call once a fetched policy has already been fully
+// fetched, integrity-checked, and durably installed -- so a slow or failing
+// reconciliation attempt can never leave the recorder in a half-updated
+// state, and can never delay a filesystem decision that's already in
+// flight.
+
+// reconcileFleetPolicy compares resp's desired policy against what this
+// session currently enforces and, only if they differ, fetches, validates,
+// and atomically installs the new version. An empty DesiredPolicyID means
+// "not (or no longer) Fleet-policy-managed" -- Sentinel keeps enforcing
+// whatever it already has rather than treating a missing assignment as
+// "clear my policy."
+func (s *sentinelSession) reconcileFleetPolicy(resp fleet.HeartbeatResponse) {
+	if resp.DesiredPolicyID == "" {
+		return
+	}
+	desired := fleet.PolicyRef{PolicyID: resp.DesiredPolicyID, Version: resp.DesiredPolicyVersion, Hash: resp.DesiredPolicyHash}
+	if s.getFleetPolicyRef().Equal(desired) {
+		return // already in sync; do not re-fetch/re-apply identical desired state
+	}
+
+	// A real, observable "actively working on it" window -- reported before
+	// the network fetch, not fabricated after the fact.
+	s.reportReconcileStatus("RECONCILING", "", desired.Hash)
+
+	pv, err := s.fleetClient.GetPolicyVersion(desired.PolicyID, desired.Version)
+	if err != nil {
+		s.failReconcile(desired, fmt.Sprintf("fetch failed: %v", err))
+		return
+	}
+	if pv.Hash != desired.Hash {
+		s.failReconcile(desired, fmt.Sprintf("fetched content hash %s does not match desired hash %s -- refusing to apply", pv.Hash, desired.Hash))
+		return
+	}
+	hash, newCfg, err := fleet.ComputePolicyHash(pv.YAML)
+	if err != nil {
+		s.failReconcile(desired, fmt.Sprintf("fetched policy failed to parse: %v", err))
+		return
+	}
+	if hash != desired.Hash {
+		// Unreachable in practice given the check above, but a policy swap
+		// is consequential enough not to trust a single comparison: recompute
+		// independently before ever installing.
+		s.failReconcile(desired, "recomputed hash does not match desired hash -- refusing to apply")
+		return
+	}
+
+	if err := installFleetPolicy(s.repoAbs, pv.YAML, desired); err != nil {
+		s.failReconcile(desired, fmt.Sprintf("could not install policy atomically: %v", err))
+		return
+	}
+
+	s.setFleetPolicyRef(desired)
+	s.setCfg(newCfg)
+	s.rec.SetPolicy(newCfg)
+	fmt.Printf("Fleet policy reconciled: %s v%d (hash %s) now active\n", desired.PolicyID, desired.Version, desired.Hash)
+	// Report success immediately rather than waiting for the next regular
+	// heartbeat tick (up to a full DefaultHeartbeatInterval later): the
+	// control plane's IN_SYNC display should catch up to real enforcement
+	// promptly, not lag it. buildHeartbeatRequest already reflects the new
+	// fleetPolicyRef (set just above), so this is an ordinary heartbeat --
+	// no special reconcile fields needed; best-effort like every other
+	// fleet call.
+	if _, err := s.fleetClient.Heartbeat(s.buildHeartbeatRequest()); err != nil {
+		fmt.Printf("WARN: fleet post-reconcile heartbeat failed: %v (will report as usual on the next interval)\n", err)
+	}
+}
+
+// reportReconcileStatus sends an out-of-band heartbeat carrying only a
+// reconcile self-report, best-effort. A failure here is logged and
+// swallowed like every other fleet call -- it never affects local
+// enforcement, and a missed status report is superseded by the next regular
+// heartbeat tick regardless.
+func (s *sentinelSession) reportReconcileStatus(status, errMsg, forHash string) {
+	req := s.buildHeartbeatRequest()
+	req.ReconcileStatus = status
+	req.ReconcileError = errMsg
+	req.ReconcileForHash = forHash
+	if _, err := s.fleetClient.Heartbeat(req); err != nil {
+		fmt.Printf("WARN: fleet reconcile-status report failed: %v\n", err)
+	}
+}
+
+// failReconcile logs and reports a reconciliation failure for desired,
+// leaving the session's current cfg/fleetPolicyRef (its last-known-good
+// policy) completely untouched -- the whole point of validate-before-
+// install: an unusable remote policy must never replace a valid local one.
+func (s *sentinelSession) failReconcile(desired fleet.PolicyRef, reason string) {
+	fmt.Printf("WARN: fleet policy reconciliation failed for %s v%d: %s (keeping last-known-good policy)\n", desired.PolicyID, desired.Version, reason)
+	s.reportReconcileStatus("RECONCILE_FAILED", reason, desired.Hash)
+}
+
+// fleetLKGFile is the durable last-known-good record of the most recently
+// successfully-applied Fleet-managed policy for a repository: content and
+// identity together in one file, written via a single atomic rename
+// (installFleetPolicy) so there is never a window where the two could
+// disagree with each other (as two separate files could, if a crash landed
+// between writing them).
+type fleetLKGFile struct {
+	PolicyID  string    `json:"policy_id"`
+	Version   int       `json:"version"`
+	Hash      string    `json:"hash"`
+	YAML      string    `json:"yaml"`
+	AppliedAt time.Time `json:"applied_at"`
+}
+
+func fleetPolicyLKGPath(repoAbs string) string {
+	return filepath.Join(repoAbs, ".airlock", "fleet-policy.json")
+}
+
+// loadFleetLKG returns the last-known-good Fleet-managed policy for repoAbs,
+// if one has ever been successfully applied and both its stored content and
+// claimed hash are still internally consistent. ok=false (not an error,
+// nothing logged) simply means "nothing to restore yet" for a brand-new
+// Fleet-managed Sentinel -- it falls back to local airlock.yaml exactly
+// like a standalone Sentinel until its first successful reconciliation. A
+// corrupted or tampered LKG file (content hash no longer matches what was
+// recorded) is deliberately never trusted, for the same reason: never
+// enforce unknown or altered content just because a file exists on disk.
+func loadFleetLKG(repoAbs string) (*policy.Config, fleet.PolicyRef, bool) {
+	b, err := os.ReadFile(fleetPolicyLKGPath(repoAbs))
+	if err != nil {
+		return nil, fleet.PolicyRef{}, false
+	}
+	var f fleetLKGFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, fleet.PolicyRef{}, false
+	}
+	hash, cfg, err := fleet.ComputePolicyHash(f.YAML)
+	if err != nil || hash != f.Hash {
+		return nil, fleet.PolicyRef{}, false
+	}
+	return cfg, fleet.PolicyRef{PolicyID: f.PolicyID, Version: f.Version, Hash: f.Hash}, true
+}
+
+// installFleetPolicy durably and atomically records yamlContent as repoAbs's
+// new last-known-good Fleet policy: write to a temp file in the same
+// directory, then a single os.Rename over the real path. Same-directory
+// rename is atomic on the filesystems Airlock targets, so a reader (a
+// concurrent loadFleetLKG, or this same process after a crash mid-write)
+// only ever observes the complete old file or the complete new one, never a
+// partially-written one.
+func installFleetPolicy(repoAbs, yamlContent string, ref fleet.PolicyRef) error {
+	path := fleetPolicyLKGPath(repoAbs)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f := fleetLKGFile{PolicyID: ref.PolicyID, Version: ref.Version, Hash: ref.Hash, YAML: yamlContent, AppliedAt: time.Now().UTC()}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

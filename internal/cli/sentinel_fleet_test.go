@@ -19,7 +19,11 @@ func newTestFleetServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(fleet.NewServer(store, "").Handler())
+	policyStore, err := fleet.OpenPolicyStore(filepath.Join(t.TempDir(), "fleet-policies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(fleet.NewServer(store, policyStore, "").Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
