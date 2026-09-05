@@ -1,16 +1,21 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/events"
+	"github.com/mirelahmed-commits/SentinelAirlock/internal/fleet"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/governance"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/index"
 	"github.com/mirelahmed-commits/SentinelAirlock/internal/policy"
@@ -37,6 +42,33 @@ const sentinelDebounce = 200 * time.Millisecond
 // Sentinel controls — real editor/IDE activity can be arbitrarily frequent).
 const sentinelRefreshInterval = 2 * time.Second
 
+// fleetHeartbeatInterval returns fleet.DefaultHeartbeatInterval, unless
+// AIRLOCK_FLEET_HEARTBEAT_INTERVAL is set to a valid Go duration -- a test
+// hook only, so integration tests don't have to wait out the real ~10s
+// production cadence to observe a heartbeat.
+func fleetHeartbeatInterval() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("AIRLOCK_FLEET_HEARTBEAT_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fleet.DefaultHeartbeatInterval
+}
+
+// fleetEnrollBackoffBase returns the starting backoff for fleetTryEnroll's
+// exponential retry burst, unless AIRLOCK_FLEET_ENROLL_BACKOFF_BASE is set
+// to a valid Go duration -- a test hook only, so a test can exercise the
+// bounded-retry behavior in milliseconds instead of the real up-to-30s
+// production worst case.
+func fleetEnrollBackoffBase() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("AIRLOCK_FLEET_ENROLL_BACKOFF_BASE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Second
+}
+
 func sentinelCmd() *cobra.Command {
 	var (
 		repoPath   string
@@ -46,6 +78,8 @@ func sentinelCmd() *cobra.Command {
 		status     bool
 		stop       bool
 		managed    bool
+		fleetURL   string
+		fleetToken string
 	)
 
 	cmd := &cobra.Command{
@@ -105,10 +139,10 @@ against a Sentinel session with no separate inspection stack.`,
 			}
 
 			if background {
-				return startSentinelBackground(repoAbs, policyPath, policyPack)
+				return startSentinelBackground(repoAbs, policyPath, policyPack, fleetURL, fleetToken)
 			}
 
-			return runSentinelForeground(repoAbs, policyPath, policyPack, managed)
+			return runSentinelForeground(repoAbs, policyPath, policyPack, managed, fleetURL, fleetToken)
 		},
 	}
 
@@ -120,14 +154,16 @@ against a Sentinel session with no separate inspection stack.`,
 	cmd.Flags().BoolVar(&stop, "stop", false, "Stop the running Sentinel for --repo")
 	cmd.Flags().BoolVar(&managed, "managed", false, "Internal: run as the managed background sentinel")
 	_ = cmd.Flags().MarkHidden("managed")
+	cmd.Flags().StringVar(&fleetURL, "fleet", "", "Airlock Fleet control plane URL to enroll with and heartbeat to (optional; standalone if unset)")
+	cmd.Flags().StringVar(&fleetToken, "fleet-token", "", "Shared token for the fleet control plane, if it requires one")
 	return cmd
 }
 
 // runSentinelForeground resolves policy, takes the session-start checkpoint,
 // seeds and starts the recorder against the real repo, and blocks until a
 // stop signal (Ctrl-C, SIGTERM, or `airlock sentinel --stop`) arrives.
-func runSentinelForeground(repoAbs, policyPath, policyPack string, managed bool) error {
-	sess, err := startSentinelSession(repoAbs, policyPath, policyPack, managed)
+func runSentinelForeground(repoAbs, policyPath, policyPack string, managed bool, fleetURL, fleetToken string) error {
+	sess, err := startSentinelSession(repoAbs, policyPath, policyPack, managed, fleetURL, fleetToken)
 	if err != nil {
 		return err
 	}
@@ -170,7 +206,7 @@ func runSentinelForeground(repoAbs, policyPath, policyPack string, managed bool)
 // session deterministically — perform filesystem operations, assert on
 // evidence, then call sess.shutdown() directly — without needing to send a
 // real signal to the test process.
-func startSentinelSession(repoAbs, policyPath, policyPack string, managed bool) (*sentinelSession, error) {
+func startSentinelSession(repoAbs, policyPath, policyPack string, managed bool, fleetURL, fleetToken string) (*sentinelSession, error) {
 	resolvedPolicyPath := policyPath
 	if !filepath.IsAbs(resolvedPolicyPath) {
 		resolvedPolicyPath = filepath.Join(repoAbs, resolvedPolicyPath)
@@ -265,6 +301,10 @@ func startSentinelSession(repoAbs, policyPath, policyPack string, managed bool) 
 		return nil, err
 	}
 
+	if strings.TrimSpace(fleetURL) != "" {
+		sess.startFleet(fleetURL, fleetToken)
+	}
+
 	return sess, nil
 }
 
@@ -285,6 +325,16 @@ type sentinelSession struct {
 	logger         *events.Logger
 	rec            *recorder.Recorder
 	startedAt      time.Time
+
+	// Fleet reporting (optional; nil/zero when --fleet is unset). See
+	// startFleet and fleetLoop below. sentinelID is the durable identity for
+	// "this Sentinel governing this repo" -- distinct from sessionID, which
+	// is fresh every restart. See internal/fleet/identity.go.
+	sentinelID     string
+	fleetMachineID string
+	fleetClient    *fleet.Client
+	fleetStopCh    chan struct{}
+	fleetDone      chan struct{}
 }
 
 func (s *sentinelSession) writeManifest(status string) error {
@@ -340,6 +390,7 @@ func (s *sentinelSession) refreshEvidence(status string) {
 // before metadata is removed, so --status can never observe a "not running"
 // state before evidence is actually consistent.
 func (s *sentinelSession) shutdown() {
+	s.stopFleet()
 	if s.rec != nil {
 		_ = s.rec.Stop()
 	}
@@ -349,4 +400,208 @@ func (s *sentinelSession) shutdown() {
 	s.refreshEvidence("stopped")
 	_ = s.logger.Close()
 	removeSentinelMeta(s.repoAbs)
+}
+
+// --- Fleet reporting -------------------------------------------------------
+//
+// Everything below this point is asynchronous management traffic to an
+// optional Airlock Fleet control plane (`airlock fleet serve`). It never
+// participates in a filesystem-mutation decision: local governance
+// (recorder + governance packages, above) has already allowed/denied/
+// reverted a change before any of this code runs. This goroutine's only
+// job is to periodically tell a control plane "I exist, here is my
+// identity/version/policy, and here is what I've done" -- and to keep doing
+// that indefinitely, tolerating any number of failures, for as long as the
+// session runs.
+
+// startFleet resolves this Sentinel's durable identity and launches the
+// enroll+heartbeat goroutine. Any failure here (e.g. cannot resolve a home
+// directory for the machine identity file) only disables fleet reporting
+// for this run -- it never fails session startup, since Sentinel must work
+// standalone regardless of fleet configuration or fleet reachability.
+func (s *sentinelSession) startFleet(fleetURL, fleetToken string) {
+	machineID, err := fleet.MachineID()
+	if err != nil {
+		fmt.Printf("WARN: fleet reporting disabled: could not establish machine identity: %v\n", err)
+		return
+	}
+	sentinelID, err := fleet.SentinelID(s.repoAbs)
+	if err != nil {
+		fmt.Printf("WARN: fleet reporting disabled: could not establish sentinel identity: %v\n", err)
+		return
+	}
+	s.sentinelID = sentinelID
+	s.fleetMachineID = machineID
+	s.fleetClient = fleet.NewClient(fleetURL, fleetToken)
+	s.fleetStopCh = make(chan struct{})
+	s.fleetDone = make(chan struct{})
+	go s.fleetLoop()
+}
+
+// stopFleet signals the fleet goroutine to exit and waits briefly for it, so
+// shutdown() does not race a final in-flight HTTP call and does not leak the
+// goroutine past session end. It never blocks long: fleetStopCh is buffered
+// by nothing but is always drained by fleetLoop's select within one HTTP
+// round trip (bounded by fleet.ClientTimeout) or immediately if idle.
+func (s *sentinelSession) stopFleet() {
+	if s.fleetStopCh == nil {
+		return
+	}
+	close(s.fleetStopCh)
+	select {
+	case <-s.fleetDone:
+	case <-time.After(fleet.ClientTimeout + time.Second):
+	}
+}
+
+// fleetLoop enrolls (with a bounded, exponentially-backed-off burst of
+// attempts) and then heartbeats on a fixed interval indefinitely. If the
+// initial burst does not succeed, it keeps retrying enrollment once per
+// heartbeat tick forever -- never faster than DefaultHeartbeatInterval, so
+// an unreachable control plane never becomes a tight retry loop, and a
+// control plane that comes back later is reconnected to automatically with
+// no Sentinel restart required. Every failure is logged and swallowed:
+// nothing here ever returns an error to the caller or affects local
+// enforcement.
+func (s *sentinelSession) fleetLoop() {
+	defer close(s.fleetDone)
+	enrolled := s.fleetTryEnroll()
+	ticker := time.NewTicker(fleetHeartbeatInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.fleetStopCh:
+			return
+		case <-ticker.C:
+			if !enrolled {
+				if err := s.fleetClient.Enroll(s.buildEnrollRequest()); err != nil {
+					fmt.Printf("WARN: fleet enrollment retry failed: %v (still governing %s locally)\n", err, s.repoAbs)
+					continue
+				}
+				enrolled = true
+			}
+			if err := s.fleetClient.Heartbeat(s.buildHeartbeatRequest()); err != nil {
+				fmt.Printf("WARN: fleet heartbeat failed: %v (continuing local governance; retrying next interval)\n", err)
+			}
+		}
+	}
+}
+
+// fleetTryEnroll makes a bounded, exponentially-backed-off burst of
+// enrollment attempts at session startup. It returns quickly (false) if the
+// control plane is unreachable rather than blocking indefinitely --
+// fleetLoop's ticker takes over retrying afterward at a much slower, bounded
+// rate.
+func (s *sentinelSession) fleetTryEnroll() bool {
+	backoff := fleetEnrollBackoffBase()
+	for attempt := 0; attempt < fleet.MaxEnrollAttempts; attempt++ {
+		if err := s.fleetClient.Enroll(s.buildEnrollRequest()); err == nil {
+			return true
+		} else if attempt == 0 {
+			fmt.Printf("WARN: fleet control plane unreachable (%v); Sentinel continues local governance and will keep retrying enrollment.\n", err)
+		}
+		select {
+		case <-time.After(backoff):
+			if backoff < fleet.MaxEnrollBackoff {
+				backoff *= 2
+			}
+		case <-s.fleetStopCh:
+			return false
+		}
+	}
+	return false
+}
+
+func (s *sentinelSession) buildEnrollRequest() fleet.EnrollRequest {
+	policyID, policyVersion, policyHash := s.policyIdentity()
+	return fleet.EnrollRequest{
+		SentinelID:      s.sentinelID,
+		MachineID:       s.fleetMachineID,
+		Hostname:        hostName(),
+		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
+		RepoPath:        s.repoAbs,
+		SentinelVersion: Version,
+		SessionID:       s.sessionID,
+		StartedAt:       s.startedAt,
+		PolicyID:        policyID,
+		PolicyVersion:   policyVersion,
+		PolicyHash:      policyHash,
+	}
+}
+
+func (s *sentinelSession) buildHeartbeatRequest() fleet.HeartbeatRequest {
+	policyID, policyVersion, policyHash := s.policyIdentity()
+	allow, deny, reverted, revertFailed, lastEventAt := governanceCounters(s.logger.EventsSnapshot())
+	return fleet.HeartbeatRequest{
+		SentinelID:        s.sentinelID,
+		SessionID:         s.sessionID,
+		Status:            "running",
+		Timestamp:         time.Now().UTC(),
+		SentinelVersion:   Version,
+		PolicyID:          policyID,
+		PolicyVersion:     policyVersion,
+		PolicyHash:        policyHash,
+		LastEventAt:       lastEventAt,
+		AllowCount:        allow,
+		DenyCount:         deny,
+		RevertedCount:     reverted,
+		RevertFailedCount: revertFailed,
+	}
+}
+
+// policyIdentity derives policy_id/policy_version/policy_hash from what this
+// session already resolved. policy_hash is a stable digest of the effective
+// write/read policy actually in force (not the raw config file, so
+// formatting/comment changes don't spuriously change it) -- enough for a
+// fleet operator to notice two Sentinels have diverging effective policy,
+// without Prompt 14 needing to implement any policy distribution.
+func (s *sentinelSession) policyIdentity() (id, version, hash string) {
+	id = "local"
+	if s.policyPack != "" {
+		id = s.policyPack
+		if pack, err := policypack.Get(s.policyPack); err == nil {
+			version = pack.Version
+		}
+	}
+	b, _ := json.Marshal(runmeta.BuildPolicySummary(s.policyPath, s.cfg))
+	sum := sha256.Sum256(b)
+	hash = hex.EncodeToString(sum[:])[:16]
+	return id, version, hash
+}
+
+// governanceCounters summarizes evs the same way the Sentinel viewer's
+// activity feed does (internal/web/sentinel.go): FILE_* events are allowed
+// mutations; POLICY_DENY/APPROVAL_REQUIRED are denials, further split by
+// whether the revert Meta recorded success or failure. lastEventAt is the
+// timestamp of the most recent governance-relevant event, or nil if none
+// have occurred yet.
+func governanceCounters(evs []events.Event) (allow, deny, reverted, revertFailed int, lastEventAt *time.Time) {
+	for i := range evs {
+		e := evs[i]
+		switch {
+		case strings.HasPrefix(e.Type, "FILE_"):
+			allow++
+		case e.Type == "POLICY_DENY" || e.Type == "APPROVAL_REQUIRED":
+			deny++
+			failed := false
+			if rv, ok := e.Meta["reverted"].(bool); ok {
+				if rv {
+					reverted++
+				} else {
+					failed = true
+				}
+			}
+			if es, ok := e.Meta["revert_error"].(string); ok && es != "" {
+				failed = true
+			}
+			if failed {
+				revertFailed++
+			}
+		default:
+			continue
+		}
+		ts := e.TS
+		lastEventAt = &ts
+	}
+	return allow, deny, reverted, revertFailed, lastEventAt
 }

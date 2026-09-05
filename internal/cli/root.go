@@ -31,6 +31,7 @@ func init() {
 	rootCmd.AddCommand(bootstrapCmd())
 	rootCmd.AddCommand(runCmd())
 	rootCmd.AddCommand(sentinelCmd())
+	rootCmd.AddCommand(fleetCmd())
 	rootCmd.AddCommand(configCmd())
 	rootCmd.AddCommand(agentsCmd())
 	rootCmd.AddCommand(submitCmd())
